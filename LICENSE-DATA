@@ -1,0 +1,92 @@
+Tree of Bob: data, font and brand licences
+==========================================
+
+SPOILER WARNING: src/data/tree-of-bob.json covers all six Bobiverse books.
+Do not open it if you have not finished the series.
+
+
+1. The data file
+----------------
+
+The data file src/data/tree-of-bob.json, including the star and system
+positions derived from the HYG Database that it contains, is licensed under
+the Creative Commons Attribution-ShareAlike 4.0 International licence
+(CC BY-SA 4.0):
+
+    https://creativecommons.org/licenses/by-sa/4.0/
+    Legal code: https://creativecommons.org/licenses/by-sa/4.0/legalcode.en
+
+Attribution: "Tree of Bob data, https://github.com/prompt-janitor/tree-of-bob,
+CC BY-SA 4.0", plus the source credits in section 2.
+
+The licence covers only this project's own compilation and descriptions. It
+grants no rights in Dennis E. Taylor's novels, story, characters, character
+names or trademarks. "Bobiverse" and the book titles belong to their
+respective owners and are used only to identify the books this app
+accompanies.
+
+The data is provided as is, without warranty of any kind, and may contain
+errors. Corrections are welcome through GitHub Issues:
+https://github.com/prompt-janitor/tree-of-bob/issues
+
+
+2. Sources
+----------
+
+Story data (Bobiverse Wiki)
+    Book, chapter, character and timeline details were researched from the
+    Bobiverse Wiki (https://bobiverse.fandom.com) by its contributors and from
+    fan timelines. Wiki text is licensed under CC BY-SA 3.0 Unported
+    (https://creativecommons.org/licenses/by-sa/3.0/). Descriptions in this
+    data file were written for it or adapted (summarised, reworded and
+    arranged by chapter) from those sources. Adapted material is shared under
+    CC BY-SA 4.0, as CC BY-SA 3.0 section 4(b) allows. Sources for each Bob are
+    listed in his record. The credited sources do not endorse this project.
+
+Star positions (HYG Database)
+    HYG Database v4.1 by astronexus (David Nash),
+    https://codeberg.org/astronexus/hyg, licensed under CC BY-SA 4.0
+    (https://creativecommons.org/licenses/by-sa/4.0/). Converted to the map's
+    coordinates and filtered to the stars shown. The derived star data is
+    shared under CC BY-SA 4.0.
+
+Other astronomy sources
+    Some distant positions: this project has made use of the SIMBAD database,
+    operated at CDS, Strasbourg, France, and of Wikipedia.
+
+Lineage cross-check
+    Some lineage details were cross-checked against bobiverse-map by
+    thunfischtoast (https://github.com/thunfischtoast/bobiverse-map),
+    CC BY-SA 4.0.
+
+
+3. Fonts
+--------
+
+Instrument Sans
+    Copyright 2022 The Instrument Sans Project Authors
+    (https://github.com/Instrument/instrument-sans).
+    Bundled at src/components/map/instrument-sans.ttf and used on the web.
+
+IBM Plex Mono (web build, when self-hosted)
+    Copyright 2017 IBM Corp. with Reserved Font Name "Plex".
+
+Both fonts are licensed under the SIL Open Font License, Version 1.1
+(https://openfontlicense.org/open-font-license-official-text/). The full
+licence text is distributed with the fonts as OFL.txt and shown on the app's
+licences screen. The fonts are not covered by the MIT licence or by
+CC BY-SA 4.0.
+
+
+4. App icon
+-----------
+
+The app icon (assets/images/) is not licensed for reuse.
+
+
+5. Code
+-------
+
+The source code is licensed under the MIT licence; see LICENSE.
+Third-party packages keep their own licences; the app shows them on its
+open-source licences screen.
