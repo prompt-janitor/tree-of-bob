@@ -2,7 +2,7 @@
   "expo": {
     "name": "Tree of Bob",
     "slug": "tree-of-bob",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "treeofbob",
