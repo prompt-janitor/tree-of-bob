@@ -1,0 +1,19 @@
+{
+  "name": "Tree of Bob",
+  "short_name": "Tree of Bob",
+  "description": "Spoiler-free companion to Dennis E. Taylor's Bobiverse books. Unofficial fan project.",
+  "lang": "en",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F3F4F6",
+  "theme_color": "#F3F4F6",
+  "categories": ["books", "entertainment"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
