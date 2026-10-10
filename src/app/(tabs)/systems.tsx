@@ -20,10 +20,13 @@ import { StarMap } from '@/components/map/star-map';
 import type { MapHit, MapLevel, PivotRequest } from '@/components/map/types';
 import { useContentInsets } from '@/components/screen';
 import { T } from '@/components/text';
-import { filterMapState, groupVoyages, LAYER_KEYS, mapState, type LayerMode } from '@/core';
+import { DEFAULT_LAYERS, filterMapState, groupVoyages, LAYER_KEYS, mapState, type LayerMode, type MapLayers } from '@/core';
 import { useLayout } from '@/hooks/use-layout';
 import { useOpenBob } from '@/hooks/use-open-bob';
 import { useApp } from '@/state/app';
+
+/** Every layer on Show (the panel's Show all button). */
+const ALL_LAYERS: MapLayers = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show' };
 
 /** floating: the target is not drawn on this level, so the callout has no pointer. */
 type Callout = { hit: MapHit; from?: MapHit; floating?: boolean } | { offmap: true };
@@ -320,6 +323,26 @@ export default function SystemsScreen() {
           </View>
         </View>
       ))}
+      <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 8, paddingTop: 6 }}>
+        {[
+          { label: 'Show all', layers: ALL_LAYERS },
+          { label: 'Defaults', layers: DEFAULT_LAYERS },
+        ].map((b) => {
+          const current = LAYER_KEYS.every((k) => mapLayers[k] === b.layers[k]);
+          return (
+            <Pressable
+              key={b.label}
+              onPress={() => setMapLayers(b.layers)}
+              disabled={current}
+              accessibilityRole="button"
+              accessibilityLabel={b.label}
+              accessibilityState={{ disabled: current }}
+              style={({ pressed }) => ({ flex: 1, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: p.line, opacity: current ? 0.4 : pressed ? 0.6 : 1 })}>
+              <T variant="secondary" weight="600">{b.label}</T>
+            </Pressable>
+          );
+        })}
+      </View>
     </Glass>
   ) : null;
   const keyButton = (
