@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "Tree of Bob",
+    "slug": "tree-of-bob",
+    "version": "0.2.0",
+    "orientation": "default",
+    "icon": "./assets/images/icon.png",
+    "scheme": "treeofbob",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "icon": {
+        "light": "./assets/images/icon.png",
+        "dark": "./assets/images/icon-dark.png",
+        "tinted": "./assets/images/icon-tinted.png"
+      },
+      "supportsTablet": true,
+      "bundleIdentifier": "io.github.promptjanitor.treeofbob"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F3F4F6",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png",
+      "name": "Tree of Bob",
+      "shortName": "Tree of Bob",
+      "backgroundColor": "#F3F4F6",
+      "themeColor": "#F3F4F6",
+      "description": "Spoiler-free companion to Dennis E. Taylor's Bobiverse books. Unofficial fan project."
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#F3F4F6",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76,
+          "dark": {
+            "backgroundColor": "#0C0F13",
+            "image": "./assets/images/splash-icon-dark.png"
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true,
+      "baseUrl": "/tree-of-bob"
+    }
+  }
+}
