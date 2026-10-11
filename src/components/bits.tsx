@@ -121,13 +121,21 @@ export function Segmented<V extends string>({ value, options, onChange, label, m
   );
 }
 
-export function IconButton({ icon, label, onPress, size = 44, color }: { icon: IconName; label: string; onPress: () => void; size?: number; color?: string }) {
+export function IconButton({ icon, label, onPress, size = 44, color, dot }: { icon: IconName; label: string; onPress: () => void; size?: number; color?: string; dot?: boolean }) {
   const p = usePalette();
   return (
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} hitSlop={4} style={({ pressed }) => ({ width: size, height: size, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.6 : 1 })}>
       <Icon name={icon} color={color ?? p.ink} />
+      {dot ? <Dot /> : null}
     </Pressable>
   );
+}
+
+/** A small notification dot on the upper right of an icon button (an update is waiting). Ink, with a ring in the
+ * background colour so it reads over the icon. The button's label says it too. */
+export function Dot() {
+  const p = usePalette();
+  return <View pointerEvents="none" style={{ position: 'absolute', top: 8, right: 8, width: 10, height: 10, borderRadius: 5, backgroundColor: p.ink, borderWidth: 2, borderColor: p.bg }} />;
 }
 
 export function FilterChip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {

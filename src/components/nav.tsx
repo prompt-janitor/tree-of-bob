@@ -9,11 +9,13 @@ import { TabTrigger, type TabTriggerSlotProps } from 'expo-router/ui';
 import { Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Dot } from '@/components/bits';
 import { Glass } from '@/components/glass';
 import { Icon, type IconName } from '@/components/icon';
 import { InstallButton } from '@/components/install-hint';
 import { ReadingCapsule } from '@/components/reading-capsule';
 import { T } from '@/components/text';
+import { useUpdate } from '@/hooks/use-update';
 import { useApp, usePalette } from '@/state/app';
 
 export interface TabDef {
@@ -121,6 +123,7 @@ function WideTab({ tab, isFocused, ...props }: TabTriggerSlotProps & { tab: TabD
 export function WideTopBar() {
   const insets = useSafeAreaInsets();
   const p = usePalette();
+  const update = useUpdate().available;
   return (
     <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 12, paddingBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 140 }}>
@@ -139,8 +142,9 @@ export function WideTopBar() {
         <Pressable onPress={() => router.push('/search')} accessibilityRole="button" accessibilityLabel="Search" style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
           <Icon name="search" color={p.ink} />
         </Pressable>
-        <Pressable onPress={() => router.push('/about')} accessibilityRole="button" accessibilityLabel="About and settings" style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
+        <Pressable onPress={() => router.push('/about')} accessibilityRole="button" accessibilityLabel={update ? 'About and settings, update available' : 'About and settings'} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
           <Icon name="info" color={p.ink} />
+          {update ? <Dot /> : null}
         </Pressable>
       </View>
     </View>

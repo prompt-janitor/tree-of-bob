@@ -7,15 +7,17 @@ import { ChapterHeader, Disclaimer, FlashbackCard, HereCard } from '@/components
 import { Screen } from '@/components/screen';
 import { T } from '@/components/text';
 import { useLayout } from '@/hooks/use-layout';
+import { useUpdate } from '@/hooks/use-update';
 
 export default function ChapterScreen() {
   const { compact, rail } = useLayout();
+  const update = useUpdate().available;
   return (
     <Screen>
       {compact ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginRight: -10 }}>
           <T variant="overline" tone="ink2" weight="600">TREE OF BOB</T>
-          <IconButton icon="info" label="About and settings" onPress={() => router.push('/about')} />
+          <IconButton icon="info" label={update ? 'About and settings, update available' : 'About and settings'} onPress={() => router.push('/about')} dot={update} />
         </View>
       ) : null}
       <ChapterHeader />

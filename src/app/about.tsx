@@ -7,6 +7,7 @@ import { Card, Segmented } from '@/components/bits';
 import { Icon } from '@/components/icon';
 import { SheetFrame } from '@/components/sheet';
 import { T } from '@/components/text';
+import { useUpdate } from '@/hooks/use-update';
 import { useApp, usePalette, type ThemePref } from '@/state/app';
 
 const ISSUES = 'https://github.com/prompt-janitor/tree-of-bob/issues';
@@ -33,8 +34,23 @@ function LinkRow({ label, onPress, external }: { label: string; onPress: () => v
 export default function AboutSheet() {
   const { themePref, setThemePref, validation, palette: p } = useApp();
   const version = Constants.expoConfig?.version;
+  // The commit the web build was made from (set by the Pages workflow), so a phone's build can be told apart.
+  const build = process.env.EXPO_PUBLIC_BUILD?.slice(0, 7);
+  const update = useUpdate();
   return (
     <SheetFrame title="About">
+      {update.available ? (
+        <Card style={{ padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <T variant="row" style={{ flex: 1 }}>New version available.</T>
+          <Pressable
+            onPress={update.apply}
+            accessibilityRole="button"
+            accessibilityLabel="Update to the new version"
+            style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 18, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: p.ink, opacity: pressed ? 0.6 : 1 })}>
+            <T variant="secondary" weight="600" color={p.inv}>Update</T>
+          </Pressable>
+        </Card>
+      ) : null}
       <T variant="body">{"Spoiler-free companion to Dennis E. Taylor's Bobiverse books."}</T>
 
       <View style={{ gap: 4 }}>
@@ -74,7 +90,7 @@ export default function AboutSheet() {
         <LinkRow label="Credits & licences" onPress={() => router.push('/licenses')} />
       </View>
 
-      {version ? <T variant="data" tone="ink3">{`Version ${version}`}</T> : null}
+      {version ? <T variant="data" tone="ink3">{`Version ${version}${build ? ` · ${build}` : ''}`}</T> : null}
       {validation.errors.length ? (
         <Card style={{ padding: 14, gap: 6 }}>
           <T variant="row">{`Data problem: ${validation.errors.length} issue${validation.errors.length === 1 ? '' : 's'}`}</T>

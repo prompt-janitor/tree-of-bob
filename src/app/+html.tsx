@@ -52,32 +52,51 @@ const titleScript = `
 })();
 `;
 
-// Registers the service worker (precached app, works offline). A new version installs in the background and
-// waits; it takes over while the page is hidden (app switched away or tab in the background), then the page
-// reloads itself so it never runs old code against new files. The reading position is in localStorage, so the
-// reload loses nothing. Installed (Home Screen) copies ask for persistent storage so iOS keeps the position.
+// Registers the service worker (precached app, works offline). It looks for a new version whenever the app comes
+// back to the foreground and hourly while it is open (an installed app on iOS is resumed, not reloaded, so the
+// browser's own checks rarely run). A new version installs in the background and waits: the page is told
+// ("tob-update", for the dot on the About button and the Update button in About), and it takes over when the reader
+// taps Update or, failing that, while the page is hidden (app switched away). Either way the page then reloads, so
+// it never runs old code against new files. The reading position is in localStorage, which an update never touches.
+// Installed (Home Screen) copies ask for persistent storage so iOS keeps the position.
 const serviceWorkerScript = `
 (function () {
   if (!('serviceWorker' in navigator)) return;
   var hadController = !!navigator.serviceWorker.controller;
   var reloadWhenHidden = false;
+  var reloadNow = false;
   navigator.serviceWorker.addEventListener('controllerchange', function () {
     if (!hadController) { hadController = true; return; }
-    if (document.hidden) location.reload(); else reloadWhenHidden = true;
+    if (reloadNow || document.hidden) location.reload(); else reloadWhenHidden = true;
   });
   window.addEventListener('load', function () {
     navigator.serviceWorker.register('${base}/sw.js', { scope: '${base}/' }).then(function (reg) {
-      function skipWhenHidden() {
-        if (document.hidden && reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      function waiting() {
+        if (!reg.waiting || !navigator.serviceWorker.controller) return;
+        window.__tobUpdate = true;
+        window.dispatchEvent(new Event('tob-update'));
+        if (document.hidden) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      }
+      window.__tobApplyUpdate = function () {
+        if (!reg.waiting) return;
+        reloadNow = true;
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      };
+      function check() {
+        if (!document.hidden) reg.update().catch(function () {});
       }
       document.addEventListener('visibilitychange', function () {
         if (document.hidden && reloadWhenHidden) location.reload();
-        else skipWhenHidden();
+        else if (document.hidden) waiting();
+        else check();
       });
+      window.addEventListener('focus', check);
+      setInterval(check, 60 * 60 * 1000);
       reg.addEventListener('updatefound', function () {
         var sw = reg.installing;
-        if (sw) sw.addEventListener('statechange', skipWhenHidden);
+        if (sw) sw.addEventListener('statechange', waiting);
       });
+      waiting();
     }).catch(function () {});
     var standalone = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone;
     if (standalone && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
