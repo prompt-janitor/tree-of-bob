@@ -6,15 +6,17 @@ import { View } from 'react-native';
 
 import { useHydrated } from '@/hooks/use-hydrated';
 import { useApp } from '@/state/app';
+import { mapPalette } from '@/theme/tokens';
 
 import type { StarMapProps } from './types';
 
-const base = process.env.EXPO_BASE_URL ?? '';
+// The deployed site lives under the base path (/tree-of-bob); the development server serves public/ from the root.
+const base = process.env.NODE_ENV === 'production' ? (process.env.EXPO_BASE_URL ?? '') : '';
 
 export function StarMap(props: StarMapProps) {
   const hydrated = useHydrated();
-  const { palette } = useApp();
-  const blank = <View style={[{ flex: 1, backgroundColor: palette.bg }, props.style]} aria-hidden />;
+  const { palette, mapTone } = useApp();
+  const blank = <View style={[{ flex: 1, backgroundColor: mapPalette(palette, mapTone).bg }, props.style]} aria-hidden />;
   if (!hydrated) return blank;
   return (
     <WithSkiaWeb

@@ -6,7 +6,7 @@
 // the scene is drawn by a worklet into one picture, so turning never re-renders React. Hidden from VoiceOver: the
 // header card, the callouts and the list modal carry the same facts. On the web this module is loaded only after
 // CanvasKit (see star-map.web.tsx).
-import { Canvas, Picture, Skia, useTypeface, type SkFont } from '@shopify/react-native-skia';
+import { Canvas, Picture, Skia, useImage, useTypeface, type SkFont } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PixelRatio, Platform, View, type LayoutChangeEvent } from 'react-native';
@@ -14,8 +14,9 @@ import { Gesture, GestureDetector, MouseButton } from 'react-native-gesture-hand
 import { Easing, type SharedValue, useAnimatedReaction, useDerivedValue, useReducedMotion, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
-import { clampTilt, DEFAULT_TILT, LY_PER_PC, MAX_TILT, pivotFit, type Camera, type Vec3 } from '@/core';
+import { clampTilt, DEFAULT_TILT, DEFAULT_YAW, LY_PER_PC, MAX_TILT, pivotFit, type Camera, type Vec3 } from '@/core';
 import { useApp } from '@/state/app';
+import { mapPalette } from '@/theme/tokens';
 
 import { arcPoint, dotObstacles, drawScene, edgeMarkers, proj, puckAt, trackEnds, voyageDots, type Box, type DrawHit, type Fonts } from './draw';
 import { buildScene, scaleBarFor, type Scene } from './scene';
@@ -61,7 +62,12 @@ export function anchorOf(scene: Scene, hit: MapHit | null): Vec3 | null {
 
 export default function StarMapCanvas(props: StarMapProps) {
   const { view, state, level, pivot, selectedBob, callout, insets, chrome, scaleBar, style, onPress, onPressEmpty, onPanStart, onOffDefault, onUnanchored, locked = false, layers, fitState } = props;
-  const { palette, colourOf } = useApp();
+  const { palette: appPalette, colourIn, mapTone } = useApp();
+  // Gaia's all-sky map of the Milky Way (ESA/Gaia/DPAC, CC BY-SA 3.0 IGO), greyscale, the band within 40 degrees.
+  const milkyWay = useImage(require('./milky-way.jpg'));
+  // The map can be darker than the app in light mode (mapTone); its Bob colours follow the map's scheme.
+  const palette = mapPalette(appPalette, mapTone);
+  const colourOf = useCallback((id: string) => colourIn(id, palette.scheme), [colourIn, palette.scheme]);
   const reduceMotion = useReducedMotion();
   const [size, setSize] = useState({ w: 0, h: 0 });
   const { w, h } = size;
@@ -102,7 +108,7 @@ export default function StarMapCanvas(props: StarMapProps) {
   // map area, at the centre of the viewport globe, and turning or zooming never moves it. The floor is the horizontal
   // plane through it (the globe's equator): a tap or a new chapter moves the centre, and the floor with it, to the new
   // pivot's height; a two-finger move slides the centre along the floor, so the floor stays at that height.
-  const yaw = useSharedValue(0);
+  const yaw = useSharedValue(DEFAULT_YAW);
   const tilt = useSharedValue(DEFAULT_TILT);
   // Strength of the drop lines shown only while the camera moves (0 at rest).
   const drops = useSharedValue(0);
@@ -213,7 +219,7 @@ export default function StarMapCanvas(props: StarMapProps) {
 
   /** Whether the camera is at its default (not turned, tilted, zoomed or moved by the reader). */
   const atDefault = useCallback(() => {
-    const turned = Math.abs(Math.atan2(Math.sin(yaw.get()), Math.cos(yaw.get()))) > TURNED || Math.abs(tilt.get() - DEFAULT_TILT) > TILTED;
+    const turned = Math.abs(Math.atan2(Math.sin(yaw.get() - DEFAULT_YAW), Math.cos(yaw.get() - DEFAULT_YAW))) > TURNED || Math.abs(tilt.get() - DEFAULT_TILT) > TILTED;
     const zoomed = Math.abs(scale.get() / fitScale.get() - 1) > 0.15;
     const moved = Math.hypot(ox.get() - defX.get(), oy.get() - defY.get(), oz.get() - defZ.get()) * scale.get() > 4;
     return !(turned || zoomed || moved);
@@ -235,14 +241,14 @@ export default function StarMapCanvas(props: StarMapProps) {
     seen.current = { level, n: pivot.n, pivotKey: scene.pivotKey, iw: inner.iw, ih: inner.ih };
     if (!last || last.level !== level) {
       const f = setDefaults(scene);
-      moveTo({ yaw: 0, tilt: DEFAULT_TILT, scale: f.scale, center: scene.pivot }, !!last);
+      moveTo({ yaw: DEFAULT_YAW, tilt: DEFAULT_TILT, scale: f.scale, center: scene.pivot }, !!last);
       reveal();
       return;
     }
     if (pivot.n !== last.n) {
       if (!pivot.target) {
         const f = setDefaults(scene);
-        moveTo({ yaw: 0, tilt: DEFAULT_TILT, scale: f.scale, center: scene.pivot }, true);
+        moveTo({ yaw: DEFAULT_YAW, tilt: DEFAULT_TILT, scale: f.scale, center: scene.pivot }, true);
         reveal();
       } else {
         const a = anchorOf(scene, pivot.target);
@@ -273,7 +279,7 @@ export default function StarMapCanvas(props: StarMapProps) {
   const notifyOff = useCallback((off: boolean) => onOffDefault?.(off), [onOffDefault]);
   useAnimatedReaction(
     () => {
-      const turned = Math.abs(Math.atan2(Math.sin(yaw.get()), Math.cos(yaw.get()))) > TURNED || Math.abs(tilt.get() - DEFAULT_TILT) > TILTED;
+      const turned = Math.abs(Math.atan2(Math.sin(yaw.get() - DEFAULT_YAW), Math.cos(yaw.get() - DEFAULT_YAW))) > TURNED || Math.abs(tilt.get() - DEFAULT_TILT) > TILTED;
       const zoomed = Math.abs(scale.get() / fitScale.get() - 1) > 0.15;
       const moved = Math.hypot(ox.get() - defX.get(), oy.get() - defY.get(), oz.get() - defZ.get()) * scale.get() > 4;
       return turned || zoomed || moved;
@@ -307,10 +313,11 @@ export default function StarMapCanvas(props: StarMapProps) {
         scaleBar: scaleBar ?? null,
         scaleBarLy: barLy.get(),
         viewportPrefix,
+        milkyWay,
       });
     }
     return rec.finishRecordingAsPicture();
-  }, [scene, fonts, w, h, chrome, scaleBar, viewportPrefix]);
+  }, [scene, fonts, w, h, chrome, scaleBar, viewportPrefix, milkyWay]);
 
   const camNow = useCallback(
     (): Camera => ({ yaw: yaw.get(), tilt: tilt.get(), scale: scale.get(), center: { x: ox.get(), y: oy.get(), z: oz.get() }, cx: cx.get(), cy: cy.get() }),
@@ -358,6 +365,7 @@ export default function StarMapCanvas(props: StarMapProps) {
           scaleBar: scaleBar ?? null,
           scaleBarLy: barLy.get(),
           viewportPrefix,
+          milkyWay,
           hits: drawn,
         });
         rec.finishRecordingAsPicture();
@@ -428,7 +436,7 @@ export default function StarMapCanvas(props: StarMapProps) {
       }
       return null;
     },
-    [scene, camNow, view, insets.left, insets.top, inner, state.places, fonts, w, h, drops, scale, fitScale, chrome, scaleBar, barLy, viewportPrefix],
+    [scene, camNow, view, insets.left, insets.top, inner, state.places, fonts, w, h, drops, scale, fitScale, chrome, scaleBar, barLy, viewportPrefix, milkyWay],
   );
 
   const onTap = useCallback(

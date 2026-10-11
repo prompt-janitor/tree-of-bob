@@ -63,6 +63,14 @@ export const dark: Palette = {
   onIdentity: '#0C0F13',
 };
 
+/** The Systems map's background, in either app theme: dark (default, space-like) or light. */
+export type MapTone = 'light' | 'dark';
+
+/** The palette the Systems map draws with: its own background, whatever the app theme. */
+export function mapPalette(_p: Palette, tone: MapTone): Palette {
+  return tone === 'light' ? light : dark;
+}
+
 export const space = { xs: 4, s: 8, m: 12, l: 16, xl: 20, xxl: 24, x3: 32, x4: 48 } as const;
 export const radius = { tag: 4, chip: 10, card: 14, dock: 28, sheet: 28 } as const;
 

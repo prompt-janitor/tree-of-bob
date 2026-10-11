@@ -23,6 +23,7 @@ import {
   type Vec3,
   type VoyageGroup,
 } from '@/core';
+import raw from '@/data/sky.json';
 import type { Palette } from '@/theme/tokens';
 
 import type { MapHit, MapLevel } from './types';
@@ -42,23 +43,13 @@ export function compassAt(scaleBar: { x: number; y: number } | null): { x: numbe
   return scaleBar ? { x: scaleBar.x + COMPASS_R, y: scaleBar.y - 24 - COMPASS_R } : null;
 }
 
-/** The sky stars (see Scene.sky): 360 directions from a fixed seed, two thirds within about 12 degrees of the
- * galactic plane. */
-const SKY: number[] = (() => {
-  let seed = 7;
-  const rnd = () => {
-    seed = (seed * 16807) % 2147483647;
-    return seed / 2147483647;
-  };
-  const out: number[] = [];
-  for (let i = 0; i < 360; i++) {
-    const l = rnd() * Math.PI * 2;
-    const inBand = i % 3 !== 0;
-    const b = inBand ? (rnd() + rnd() + rnd() - 1.5) * 0.28 : Math.asin(rnd() * 2 - 1);
-    out.push(Math.cos(b) * Math.cos(l), Math.cos(b) * Math.sin(l), Math.sin(b), 0.4 + rnd() * 0.6);
-  }
-  return out;
-})();
+/** How many sky stars to draw, brightest first (all of src/data/sky.json is 15,435, down to magnitude 7, about what
+ * binoculars show). Lower it if drawing the sky slows the map: 1,559 is magnitude 5, 600 magnitude 4. */
+export const SKY_STARS = 15435;
+
+/** The sky stars (see Scene.sky): real stars from the HYG catalogue in their true direction from Sol, brightest first,
+ * with a brightness from 0.1 (magnitude 7) to 1 (the brightest). Stars nearer than 50 ly are not in it. */
+const SKY: number[] = (raw as number[][]).slice(0, SKY_STARS).flatMap(([x, y, z, mag]) => [x, y, z, Math.max(0.1, Math.min(1, (7 - mag) / 7.5 + 0.1))]);
 
 /** Pips drawn under a place before the rest are summarised as "+N": one row. */
 export const MAX_PIPS = 5;
@@ -260,8 +251,8 @@ export interface SceneTheme {
 
 export interface Scene {
   level: MapLevel;
-  /** Local level: faint sky stars as unit directions with a brightness, flattened [x, y, z, b, ...] (galactic frame).
-   * Fixed, made up (not catalogue stars), denser along the galactic plane. Empty on the galaxy level. */
+  /** Local level: the sky's real stars as unit directions from Sol with a brightness, flattened [x, y, z, b, ...]
+   * (galactic frame). Empty on the galaxy level. */
   sky: number[];
   /** Background stars, flattened [x, y, z, ...] (local level only). */
   stars: number[];

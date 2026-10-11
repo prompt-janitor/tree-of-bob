@@ -2,6 +2,8 @@
 // reference position used in the design. A position is the chapter the reader is about to read: records
 // are revealed up to the chapter before it, plus the chapter's own heading.
 import { describe, expect, it } from 'vitest';
+import app from '../../app.json';
+import releases from '../data/releases.json';
 import raw from '../data/tree-of-bob.json';
 import {
   axisFor,
@@ -526,5 +528,12 @@ describe('colony labels', () => {
     const homes = (data.presence ?? []).filter((p) => p.kind === 'home');
     expect(new Set(homes.map((p) => p.system)).size).toBe(homes.length);
     expect(new Set(homes.map((p) => p.group)).size).toBe(homes.length);
+  });
+});
+
+describe('release notes', () => {
+  it('have an entry for the current version, newest first, each with a note', () => {
+    expect(releases[0].version).toBe(app.expo.version);
+    for (const r of releases) expect(r.notes.length).toBeGreaterThan(0);
   });
 });

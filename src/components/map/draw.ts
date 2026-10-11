@@ -5,7 +5,7 @@
 // camera), drop lines and feet,
 // travel history, then what is in the air (SCUT, ghosts, voyages, hops), places, the narrator's puck, the scale bar,
 // labels, and edge markers for occupied places off screen.
-import { BlurStyle, FillType, PaintStyle, Skia, StrokeCap, TileMode, type SkCanvas, type SkFont, type SkPaint, type SkPathEffect } from '@shopify/react-native-skia';
+import { BlendMode, FillType, FilterMode, MipmapMode, PaintStyle, PointMode, Skia, StrokeCap, TileMode, VertexMode, type SkCanvas, type SkImage, type SkFont, type SkPaint, type SkPathEffect } from '@shopify/react-native-skia';
 
 import type { Camera, Vec3 } from '@/core';
 
@@ -43,6 +43,9 @@ export interface DrawOptions {
   /** Words before the viewport diameter under the scale bar: "Viewport ⌀ " when the map font has the ⌀ glyph, else
    * "Viewport diameter ". */
   viewportPrefix?: string;
+  /** Gaia's all-sky map (greyscale, galactic longitude +180 to -180 left to right, latitude +40 to -40 top to bottom),
+   * once loaded. */
+  milkyWay?: SkImage | null;
   /** Filled in for hit testing (taps run the drawing once into a throwaway picture): every pip and every name in a
    * label as drawn, so a tap opens exactly what is on the screen. */
   hits?: DrawHit[];
@@ -328,8 +331,8 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
 
   // 0. The sky (local level). Infinitely far, so it depends only on which way the camera looks: turning slides it
   // past and tilting raises or lowers it; panning and zooming leave it, as the real sky does for a move of a few
-  // dozen light years. A direction is drawn as a perspective camera looking along the view would see it. Faint stars
-  // everywhere, denser along the galactic plane; near edge-on, the Milky Way band along the plane, brightest towards
+  // dozen light years. A direction is drawn as a perspective camera looking along the view would see it. The real stars
+  // (HYG catalogue, to magnitude 5) in their true directions, sized by brightness; near edge-on, the Milky Way band along the plane, brightest towards
   // the galactic centre (with a glow there) and faintest away from it. Looking down on the floor, the plane is at
   // the horizon, off screen.
   if (scene.level === 'local') {
@@ -349,58 +352,76 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
       if (fwd < 0.08) return null;
       return { x: scx + (F * rx) / fwd, y: scy - (F * up) / fwd, f: fwd };
     };
-    const starK = T.dark ? 0.32 : 0.22;
+    const starK = T.dark ? 0.6 : 0.45;
+    // The Milky Way: a mesh over the sky within 40 degrees of the plane, projected like the stars and drawn under
+    // them, textured with Gaia's all-sky map (opt.milkyWay). Its strength is
+    // fixed: where it shows depends only on the view, so it lies along the horizon when the map is seen edge-on and
+    // is off screen when looking down on the floor, with no fade by tilt.
+    const img = opt.milkyWay ?? null;
+    if (img) {
+      const NL = 96;
+      const NB = 20;
+      const pos: { x: number; y: number }[] = [];
+      const tex: { x: number; y: number }[] = [];
+      const ok: boolean[] = [];
+      const ink = Skia.Color(T.ink);
+      const iw = img.width();
+      const ih = img.height();
+      for (let j = 0; j <= NB; j++) {
+        const bd = -40 + (80 * j) / NB;
+        const b = (bd * Math.PI) / 180;
+        for (let i = 0; i <= NL; i++) {
+          // Longitude from +180 to -180 degrees: the map image runs left to right in that order.
+          const ld = 180 - (360 * i) / NL;
+          const l = (ld * Math.PI) / 180;
+          const q = sky(Math.cos(b) * Math.cos(l), Math.cos(b) * Math.sin(l), Math.sin(b));
+          ok.push(!!q);
+          pos.push(q ? { x: q.x, y: q.y } : { x: 0, y: 0 });
+          tex.push({ x: (i / NL) * iw, y: (1 - j / NB) * ih });
+        }
+      }
+      const idx: number[] = [];
+      const W = NL + 1;
+      for (let j = 0; j < NB; j++) {
+        for (let i = 0; i < NL; i++) {
+          const a0 = j * W + i;
+          const a1 = a0 + 1;
+          const b0 = a0 + W;
+          const b1 = b0 + 1;
+          if (!(ok[a0] && ok[a1] && ok[b0] && ok[b1])) continue;
+          // Skip cells stretched across the whole view (next to the edge of the visible sky).
+          if (Math.abs(pos[a0].x - pos[a1].x) > w * 2 || Math.abs(pos[a0].y - pos[b0].y) > h * 2) continue;
+          idx.push(a0, a1, b0, a1, b1, b0);
+        }
+      }
+      if (idx.length) {
+        const mp = Skia.Paint();
+        mp.setAntiAlias(true);
+        // The map is greyscale: its brightness becomes coverage of the ink colour, so the same image works on the dark
+        // and the light map.
+        mp.setShader(img.makeShaderOptions(TileMode.Clamp, TileMode.Clamp, FilterMode.Linear, MipmapMode.None));
+        mp.setColorFilter(Skia.ColorFilter.MakeCompose(Skia.ColorFilter.MakeBlend(ink, BlendMode.SrcIn), Skia.ColorFilter.MakeLumaColorFilter()));
+        mp.setAlphaf(T.dark ? 0.18 : 0.13);
+        canvas.drawVertices(Skia.MakeVertices(VertexMode.Triangles, pos, tex, undefined, idx, true), BlendMode.SrcOver, mp);
+      }
+      const gc = sky(1, 0, 0);
+      if (gc && on(gc.x, gc.y, 0)) skyLabel = { x: gc.x, y: gc.y, k: 1 };
+    }
+    // Size and strength by apparent brightness: the brightest stars larger and stronger, the faintest barely there.
+    // Drawn in SKY_LEVELS batches by brightness (one points call each) instead of one call per star.
+    const SKY_LEVELS = 6;
     const sk = scene.sky;
+    const levels: { x: number; y: number }[][] = [];
+    for (let l = 0; l < SKY_LEVELS; l++) levels.push([]);
     for (let i = 0; i < sk.length; i += 4) {
       const q = sky(sk[i], sk[i + 1], sk[i + 2]);
       if (!q || !on(q.x, q.y, 0)) continue;
-      canvas.drawCircle(q.x, q.y, 0.6 + sk[i + 3] * 0.6, paint(T.ink, Math.round(starK * sk[i + 3] * 20) / 20));
+      levels[Math.min(SKY_LEVELS - 1, Math.floor(sk[i + 3] * SKY_LEVELS))].push({ x: q.x, y: q.y });
     }
-    // The band shows only near edge-on: from about 15 degrees off the plane (either side), full at 3.
-    const edge = Math.max(0, Math.min(1, (Math.abs(st) - 0.96) / (0.9986 - 0.96)));
-    const bandK = Math.round(edge * edge * (3 - 2 * edge) * 20) / 20;
-    if (bandK > 0) {
-      // Three layers along the plane, each a single path (so no joints show): the whole circle, wide and faint; the
-      // half facing the galactic centre; and a narrower, stronger stretch round the centre itself.
-      const band = (half: number, width: number, a: number) => {
-        const path = Skia.PathBuilder.Make();
-        const N = Math.max(8, Math.round((half / Math.PI) * 120));
-        let open = false;
-        for (let i = 0; i <= N; i++) {
-          const l = -half + (i / N) * 2 * half;
-          const q = sky(Math.cos(l), Math.sin(l), 0);
-          if (!q) {
-            open = false;
-            continue;
-          }
-          if (open) path.lineTo(q.x, q.y);
-          else path.moveTo(q.x, q.y);
-          open = true;
-        }
-        // Blurred, so the band has soft edges and fades out at its ends like a glow, not a stripe.
-        const bp = Skia.Paint();
-        bp.setAntiAlias(true);
-        bp.setColor(Skia.Color(T.ink));
-        bp.setAlphaf(a * bandK * (T.dark ? 1.3 : 1));
-        bp.setStyle(PaintStyle.Stroke);
-        bp.setStrokeWidth(F * width);
-        bp.setStrokeCap(StrokeCap.Round);
-        bp.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, F * width * 0.45, true));
-        canvas.drawPath(path.build(), bp);
-      };
-      band(Math.PI, 0.12, 0.05);
-      band(Math.PI / 2, 0.08, 0.05);
-      band(Math.PI / 5, 0.05, 0.06);
-      const gc = sky(1, 0, 0);
-      if (gc && on(gc.x, gc.y, F * 0.3)) {
-        const r = F * 0.22;
-        const rgb = T.dark ? '255,255,255' : '0,0,0';
-        const glow = Skia.Paint();
-        glow.setAntiAlias(true);
-        glow.setShader(Skia.Shader.MakeRadialGradient({ x: gc.x, y: gc.y }, r, [Skia.Color(`rgba(${rgb},${(T.dark ? 0.2 : 0.14) * bandK})`), Skia.Color(`rgba(${rgb},0)`)], [0, 1], TileMode.Clamp));
-        canvas.drawCircle(gc.x, gc.y, r, glow);
-        skyLabel = { x: gc.x, y: gc.y, k: bandK };
-      }
+    for (let l = 0; l < SKY_LEVELS; l++) {
+      if (!levels[l].length) continue;
+      const b = ((l + 0.5) / SKY_LEVELS) ** 2;
+      canvas.drawPoints(PointMode.Points, levels[l], paint(T.ink, Math.round(starK * (0.22 + 0.78 * b) * 20) / 20, 0.8 + b * 3.6));
     }
   }
 
@@ -463,6 +484,12 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
       const outer = Skia.PathBuilder.Make();
       let nIn = 0;
       let nOut = 0;
+      // Outside the globe the first RING_HOLD rings keep full strength, then the next RING_FADE fade out, so near
+      // edge-on the far rings do not pile up into a mesh of flat ellipses.
+      const RING_HOLD = 2;
+      const RING_FADE = 4;
+      let outside = 0;
+      const outA = (T.dark ? 0.1 : 0.075) * under * outK;
       for (let k = 1; k <= n; k++) {
         const R = k * sb.pt;
         // A ring within RIM_GAP of the globe's equator would read as a doubled rim: the equator and the shade change
@@ -475,12 +502,18 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
           inner.addOval(rect);
           nIn++;
         } else {
-          outer.addOval(rect);
-          nOut++;
+          outside++;
+          if (outside <= RING_HOLD) {
+            outer.addOval(rect);
+            nOut++;
+          } else if (outside <= RING_HOLD + RING_FADE) {
+            const f = 1 - (outside - RING_HOLD) / (RING_FADE + 1);
+            canvas.drawOval(rect, paint(T.ink, Math.round(outA * f * 200) / 200, 0.75));
+          } else break;
         }
       }
       if (nIn) canvas.drawPath(inner.build(), paint(T.ink, (T.dark ? 0.16 : 0.13) * under * inRingK, 0.75));
-      if (nOut) canvas.drawPath(outer.build(), paint(T.ink, (T.dark ? 0.1 : 0.075) * under * outK, 0.75));
+      if (nOut) canvas.drawPath(outer.build(), paint(T.ink, outA, 0.75));
     }
     // The cross: two straight lines on the floor through the centre of view, along galactic x and y (the directions
     // of the globe's meridians), so they join the equator's 0, 90, 180 and 270 degree points. A unit step along

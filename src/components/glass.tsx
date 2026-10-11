@@ -20,7 +20,10 @@ export function Glass({ style, children, interactive, ...rest }: ViewProps & { i
 
   if (nativeGlass && !reduce) {
     return (
-      <GlassView {...rest} isInteractive={interactive} colorScheme={p.scheme} glassEffectStyle="regular" style={style}>
+      // The glass is tinted to the app's theme: over the Systems map, whose background can differ from the theme, iOS
+      // would otherwise flip it to match the map and lose the text. Over screens of the same theme the tint makes no
+      // visible difference.
+      <GlassView {...rest} isInteractive={interactive} colorScheme={p.scheme} glassEffectStyle="regular" tintColor={p.scheme === 'light' ? 'rgba(255,255,255,0.72)' : 'rgba(21,25,32,0.72)'} style={style}>
         {children}
       </GlassView>
     );

@@ -74,7 +74,7 @@ Pushing to `main` deploys the web app to GitHub Pages.
 - Code: MIT, see [`LICENSE`](LICENSE).
 - Data file: CC BY-SA 4.0, see [`LICENSE-DATA`](LICENSE-DATA). Adapted in part from the
   [Bobiverse Wiki](https://bobiverse.fandom.com) (CC BY-SA 3.0). Star positions from the
-  [HYG Database v4.1](https://codeberg.org/astronexus/hyg) (CC BY-SA 4.0); some far positions from SIMBAD and
+  [HYG Database v4.1 and v4.2](https://codeberg.org/astronexus/hyg) (CC BY-SA 4.0); some far positions from SIMBAD and
   Wikipedia.
 - Fonts: Instrument Sans and IBM Plex Mono, SIL Open Font License 1.1.
 - App icon: not licensed for reuse.

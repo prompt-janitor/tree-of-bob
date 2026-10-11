@@ -545,7 +545,10 @@ export interface Camera {
   cy: number;
 }
 
-export const DEFAULT_TILT = (55 * Math.PI) / 180;
+export const DEFAULT_TILT = (65 * Math.PI) / 180;
+/** The default turn: towards the galactic centre (galactic +x up the screen, away from the viewer), with the camera
+ * moved 25 degrees clockwise round the pivot as seen from galactic north. */
+export const DEFAULT_YAW = Math.PI / 2 + (25 * Math.PI) / 180;
 /** The steepest tilt the reader can reach: straight up from below the plane (the view may go all
  * the way round; recentre brings it back). The projection is a rotation, so every tilt is well defined. */
 export const MAX_TILT = Math.PI;

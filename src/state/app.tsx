@@ -25,7 +25,7 @@ import {
   type ValidationResult,
   type Zoom,
 } from '@/core';
-import { dark, light, type Palette } from '@/theme/tokens';
+import { dark, light, type MapTone, type Palette } from '@/theme/tokens';
 import { identityColour } from '@/theme/identity';
 
 const data = raw as unknown as TreeData;
@@ -44,6 +44,7 @@ interface Saved {
   mapLayers?: unknown;
   /** Systems map: two fingers only zoom (the centre stays where it was put). */
   mapLock?: boolean;
+  mapTone?: MapTone;
 }
 
 /** Default width of the Bob drawer on iPad and wide web (points). */
@@ -55,6 +56,8 @@ interface AppState {
   palette: Palette;
   /** Identity colour for a Bob (resolved through his colour key). */
   colourOf: (id: string) => string;
+  /** Identity colour for a Bob in a given scheme (the Systems map can be dark while the app is light). */
+  colourIn: (id: string, scheme: 'light' | 'dark') => string;
   themePref: ThemePref;
   setThemePref: (t: ThemePref) => void;
   setProgress: (p: Progress) => void;
@@ -81,6 +84,9 @@ interface AppState {
   setMapLayers: (l: MapLayers) => void;
   mapLock: boolean;
   setMapLock: (on: boolean) => void;
+  /** The Systems map's background (dark by default, in either app theme). */
+  mapTone: MapTone;
+  setMapTone: (t: MapTone) => void;
   /** iPhone: the floating nav shrinks while the content scrolls down. */
   navCompact: boolean;
   setNavCompact: (c: boolean) => void;
@@ -105,6 +111,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [mapLayers, setMapLayers] = useState<MapLayers>(DEFAULT_LAYERS);
   // Touch devices start locked: a pinch there always moves the fingers' midpoint a little.
   const [mapLock, setMapLock] = useState(Platform.OS !== 'web');
+  const [mapTone, setMapTone] = useState<MapTone>('dark');
 
   useEffect(() => {
     AsyncStorage.getItem(STORE_KEY)
@@ -117,6 +124,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (typeof saved.drawerWidth === 'number') setDrawerWidth(saved.drawerWidth);
         if (saved.mapLayers) setMapLayers(readLayers(saved.mapLayers));
         if (typeof saved.mapLock === 'boolean') setMapLock(saved.mapLock);
+        if (saved.mapTone === 'light' || saved.mapTone === 'dark') setMapTone(saved.mapTone);
       })
       .catch(() => {})
       .finally(() => setHydrated(true));
@@ -124,9 +132,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!hydrated) return;
-    const saved: Saved = { progress, theme: themePref, zoom, logScope, drawerWidth, mapLayers, mapLock };
+    const saved: Saved = { progress, theme: themePref, zoom, logScope, drawerWidth, mapLayers, mapLock, mapTone };
     AsyncStorage.setItem(STORE_KEY, JSON.stringify(saved)).catch(() => {});
-  }, [hydrated, progress, themePref, zoom, logScope, drawerWidth, mapLayers, mapLock]);
+  }, [hydrated, progress, themePref, zoom, logScope, drawerWidth, mapLayers, mapLock, mapTone]);
 
   const view = useMemo(() => computeView(model, progress), [progress]);
 
@@ -140,13 +148,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const scheme = !ready ? 'light' : themePref === 'system' ? (system === 'dark' ? 'dark' : 'light') : themePref;
   const palette = scheme === 'dark' ? dark : light;
 
-  const colourOf = useCallback(
-    (id: string) => {
+  const colourIn = useCallback(
+    (id: string, scheme: 'light' | 'dark') => {
       const key = view.info.get(id)?.colourKey ?? model.root;
-      return identityColour(model.slotOf.get(key) ?? 0, palette.scheme);
+      return identityColour(model.slotOf.get(key) ?? 0, scheme);
     },
-    [view, palette.scheme],
+    [view],
   );
+  const colourOf = useCallback((id: string) => colourIn(id, palette.scheme), [colourIn, palette.scheme]);
 
   const setProgress = useCallback(
     (p: Progress) => {
@@ -169,6 +178,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     validation,
     palette,
     colourOf,
+    colourIn,
     themePref,
     setThemePref,
     setProgress,
@@ -203,6 +213,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMapLayers,
     mapLock,
     setMapLock,
+    mapTone,
+    setMapTone,
     navCompact,
     setNavCompact,
     hydrated,

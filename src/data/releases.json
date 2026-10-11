@@ -1,0 +1,7 @@
+[
+ { "version": "0.2.4", "notes": ["Real night sky on the map: catalogue stars and the Milky Way from Gaia.", "Dark map background by default; Light in Layers.", "Lower home view; outer rings fade out."] },
+ { "version": "0.2.3", "notes": ["Update notice: a dot on About and an Update button.", "About shows the build."] },
+ { "version": "0.2.2", "notes": ["Layers: Show all and Defaults."] },
+ { "version": "0.2.1", "notes": ["Map layers: Chapter, Show or Hide each.", "Centre lock, galaxy locator, home systems and colonies."] },
+ { "version": "0.2.0", "notes": ["First public release."] }
+]

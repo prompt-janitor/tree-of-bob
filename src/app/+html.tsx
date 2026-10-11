@@ -8,8 +8,9 @@ import type { PropsWithChildren } from 'react';
 import app from '../../app.json';
 import { APP_TITLE, SCREEN_TITLES } from '@/web/document-title';
 
-const base = process.env.EXPO_BASE_URL ?? '';
 const production = process.env.NODE_ENV === 'production';
+// The deployed site lives under the base path (/tree-of-bob); the development server serves public/ from the root.
+const base = production ? (process.env.EXPO_BASE_URL ?? '') : '';
 
 export default function Root({ children }: PropsWithChildren) {
   return (

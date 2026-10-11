@@ -9,7 +9,9 @@ Do not open it if you have not finished the series.
 ----------------
 
 The data file src/data/tree-of-bob.json, including the star and system
-positions derived from the HYG Database that it contains, is licensed under
+positions derived from the HYG Database that it contains, and the sky file
+src/data/sky.json (star directions and magnitudes from the same database), are
+licensed under
 the Creative Commons Attribution-ShareAlike 4.0 International licence
 (CC BY-SA 4.0):
 
@@ -44,11 +46,19 @@ Story data (Bobiverse Wiki)
     listed in his record. The credited sources do not endorse this project.
 
 Star positions (HYG Database)
-    HYG Database v4.1 by astronexus (David Nash),
+    HYG Database v4.1 and v4.2 (sky) by astronexus (David Nash),
     https://codeberg.org/astronexus/hyg, licensed under CC BY-SA 4.0
     (https://creativecommons.org/licenses/by-sa/4.0/). Converted to the map's
     coordinates and filtered to the stars shown. The derived star data is
     shared under CC BY-SA 4.0.
+
+Milky Way image (src/components/map/milky-way.jpg)
+    "The colour of the sky from Gaia's Early Data Release 3" (equirectangular),
+    Copyright ESA/Gaia/DPAC, licensed under CC BY-SA 3.0 IGO
+    (https://creativecommons.org/licenses/by-sa/3.0/igo/). Acknowledgement:
+    A. Moitinho. Cropped to within 40 degrees of the galactic plane, converted
+    to greyscale, levelled and resized. The adapted image is shared under
+    CC BY-SA 3.0 IGO.
 
 Other astronomy sources
     Some distant positions: this project has made use of the SIMBAD database,

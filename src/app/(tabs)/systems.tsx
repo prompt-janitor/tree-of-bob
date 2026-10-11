@@ -3,6 +3,7 @@
 // the tools (level, list, recentre), the "off the map" pill and one callout at a time. The full text equivalent is the
 // list modal (/systems-list).
 import { router, useFocusEffect } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Pressable, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -24,6 +25,7 @@ import { DEFAULT_LAYERS, filterMapState, groupVoyages, LAYER_KEYS, mapState, typ
 import { useLayout } from '@/hooks/use-layout';
 import { useOpenBob } from '@/hooks/use-open-bob';
 import { useApp } from '@/state/app';
+import { mapPalette, type MapTone } from '@/theme/tokens';
 
 /** Every layer on Show (the panel's Show all button). */
 const ALL_LAYERS: MapLayers = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show' };
@@ -32,7 +34,16 @@ const ALL_LAYERS: MapLayers = { bobs: 'show', others: 'show', journeys: 'show', 
 type Callout = { hit: MapHit; from?: MapHit; floating?: boolean } | { offmap: true };
 
 export default function SystemsScreen() {
-  const { view, palette: p, selected, select, setNavCompact, colourOf, mapLayers, setMapLayers, mapLock, setMapLock } = useApp();
+  const { view, palette: p, selected, select, setNavCompact, colourOf, mapLayers, setMapLayers, mapLock, setMapLock, mapTone, setMapTone } = useApp();
+  const mp = mapPalette(p, mapTone);
+  // Whether this tab is showing (tabs stay mounted): only then does the darker map set a light status bar.
+  const [focused, setFocused] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setFocused(true);
+      return () => setFocused(false);
+    }, []),
+  );
   const { compact } = useLayout();
   const safe = useSafeAreaInsets();
   const pad = useContentInsets();
@@ -323,6 +334,27 @@ export default function SystemsScreen() {
           </View>
         </View>
       ))}
+      <View accessibilityRole="radiogroup" accessibilityLabel="Map background" style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 8, gap: 8 }}>
+        <T variant="secondary" weight="600" style={{ flex: 1 }}>Background</T>
+        <View style={{ flexDirection: 'row', borderRadius: 12, backgroundColor: p.line }}>
+          {(['dark', 'light'] as MapTone[]).map((t) => {
+            const on = mapTone === t;
+            const label = t === 'dark' ? 'Dark' : 'Light';
+            return (
+              <Pressable
+                key={t}
+                onPress={() => setMapTone(t)}
+                accessibilityRole="radio"
+                accessibilityLabel={`Map background: ${label}`}
+                accessibilityState={{ selected: on }}
+                style={({ pressed }) => ({ width: 59, height: 44, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.6 : 1 })}>
+                <View style={{ position: 'absolute', top: 6, bottom: 6, left: 2, right: 2, borderRadius: 9, backgroundColor: on ? p.ink : 'transparent' }} />
+                <T variant="secondary" weight="600" color={on ? p.inv : p.ink}>{label}</T>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
       <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 8, paddingTop: 6 }}>
         {[
           { label: 'Show all', layers: ALL_LAYERS },
@@ -352,7 +384,7 @@ export default function SystemsScreen() {
   );
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: p.bg }} onLayout={(e) => setArea({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: mp.bg }} onLayout={(e) => setArea({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
       <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" aria-hidden style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
         <StarMap
           view={view}
@@ -442,6 +474,7 @@ export default function SystemsScreen() {
       ) : null}
       {calloutView}
       {layersPanel}
+      {focused && mp.scheme !== p.scheme ? <StatusBar style={mp.scheme === 'dark' ? 'light' : 'dark'} /> : null}
     </GestureHandlerRootView>
   );
 }
