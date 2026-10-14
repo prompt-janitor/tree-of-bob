@@ -74,7 +74,7 @@ export function matchesFilter(view: ProgressView, id: string, f: LocationFilter)
 }
 
 export interface TreeSection {
-  key: 'chapter' | 'travel' | 'here' | 'rest' | 'all';
+  key: 'chapter' | 'travel' | 'here' | 'calling' | 'rest' | 'all';
   title: string | null;
   members: Set<string>;
 }
@@ -103,15 +103,20 @@ export function settingLabels(view: ProgressView): { place: string | null; other
 
 /**
  * A review for the start of a chapter: whose chapter it is ("In this chapter": the narrator), who travels with him,
- * who is at the system the chapter is set in (or heading for), then everyone else. Empty sections are left out.
+ * who is at the system the chapter is set in (or heading for) or there in its cast, who calls in to it, then everyone
+ * else. Empty sections are left out.
  */
 export function treeSections(view: ProgressView, shown: string[]): TreeSection[] {
   const ch = view.chapter;
   const set = new Set(shown);
   const narrator = ch.narrator && set.has(ch.narrator) ? [ch.narrator] : [];
-  const travelling = ch.travelling.filter((id) => set.has(id));
-  const here = ch.here.filter((id) => set.has(id) && !travelling.includes(id));
-  const placed = new Set([...narrator, ...travelling, ...here]);
+  const present = ch.cast.filter((c) => !c.remote && set.has(c.id) && !narrator.includes(c.id)).map((c) => c.id);
+  // On a voyage the cast there is aboard with him.
+  const voyage = ch.setting === 'enroute' || ch.setting === 'deep';
+  const travelling = [...new Set([...ch.travelling, ...(voyage ? present : [])])].filter((id) => set.has(id));
+  const calling = ch.cast.filter((c) => c.remote && set.has(c.id) && !narrator.includes(c.id) && !travelling.includes(c.id)).map((c) => c.id);
+  const here = [...new Set([...ch.here, ...(voyage ? [] : present)])].filter((id) => set.has(id) && !travelling.includes(id) && !calling.includes(id) && !narrator.includes(id));
+  const placed = new Set([...narrator, ...travelling, ...here, ...calling]);
   const rest = shown.filter((id) => !placed.has(id));
   if (!placed.size) return [{ key: 'all', title: null, members: set }];
   const labels = settingLabels(view);
@@ -119,6 +124,7 @@ export function treeSections(view: ProgressView, shown: string[]): TreeSection[]
   if (narrator.length) out.push({ key: 'chapter', title: 'In this chapter', members: new Set(narrator) });
   if (travelling.length) out.push({ key: 'travel', title: `Travelling with ${ch.narrator}`, members: new Set(travelling) });
   if (here.length) out.push({ key: 'here', title: labels.others ?? `At ${ch.system}`, members: new Set(here) });
+  if (calling.length) out.push({ key: 'calling', title: 'Calling in', members: new Set(calling) });
   if (rest.length) out.push({ key: 'rest', title: 'Everyone else', members: new Set(rest) });
   return out;
 }
@@ -133,7 +139,7 @@ export function treeRows(view: ProgressView, toggled: Set<string>, filter: Locat
   const rows: TreeRow[] = [];
   for (const sec of treeSections(view, shown)) {
     if (sec.title) rows.push({ kind: 'header', key: `__${sec.key}`, text: sec.title, count: sec.members.size });
-    const focused = sec.key === 'chapter' || sec.key === 'travel' || sec.key === 'here';
+    const focused = sec.key === 'chapter' || sec.key === 'travel' || sec.key === 'here' || sec.key === 'calling';
     rows.push(...sectionRows(view, toggled, sec.key, sec.members, { parentsOnly: focused, fold: sec.key === 'here', selected }));
   }
   return rows;

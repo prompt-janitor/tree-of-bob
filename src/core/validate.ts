@@ -98,7 +98,50 @@ export function validateData(data: TreeData): ValidationResult {
     if (s.kind === 'near' && !s.near) err(`${label}: kind "near" needs "near".`);
     checkProv(s, label);
   });
+  // Chapter settings and cast (all optional): known systems and people, and nobody in a chapter before he is met.
+  const bobIds = new Set(data.bobs.map((b) => b.id));
+  const otherIds = new Map((data.others ?? []).map((o) => [o.id, o]));
+  const VIA = ['vr', 'android', 'comms'];
+  const isSystem = (id: string) => systemIds.has(id) || !(data.systems?.length);
+  data.books.forEach((b) => b.chapters?.forEach((c) => {
+    const label = `Book ${b.id} ch ${c.n}`;
+    for (const k of ['system', 'narratorFrom'] as const) {
+      const v = c[k];
+      if (v != null && (typeof v !== 'string' || !isSystem(v))) err(`${label}: ${k} "${v}" is not a known system.`);
+    }
+    if (c.narratorFrom != null && c.narratorFrom === c.system) warn(`${label}: narratorFrom is the chapter's own system (leave it null).`);
+    if (c.narratorVia != null && !VIA.includes(c.narratorVia)) err(`${label}: narratorVia must be "vr", "android" or "comms".`);
+    if (c.cast == null) return;
+    if (!Array.isArray(c.cast)) return err(`${label}: "cast" must be an array.`);
+    const here = rk({ book: b.id, chapter: c.n });
+    c.cast.forEach((m, i) => {
+      const who = `${label} cast #${i + 1} (${m?.id})`;
+      if (!m?.id) return err(`${label} cast #${i + 1}: needs "id".`);
+      const rec = byId.get(m.id) ?? otherIds.get(m.id);
+      if (!rec) err(`${who}: not a known Bob or other.`);
+      else if (exists(rec.reveal) && rk(rec.reveal) > here) warn(`${who}: in the chapter before he is revealed.`);
+      if (m.from != null && (typeof m.from !== 'string' || !isSystem(m.from))) err(`${who}: from "${m.from}" is not a known system.`);
+      if (m.via != null && m.via !== 'present' && !VIA.includes(m.via)) err(`${who}: via must be "present", "vr", "android" or "comms".`);
+      if (bobIds.has(m.id) && m.id === (data.settings?.povAliases?.[c.pov ?? ''] ?? c.pov)) warn(`${who}: the narrator is listed in his own cast.`);
+    });
+  }));
   for (const s of data.systems ?? []) if (s.kind === 'near' && s.near && !systemIds.has(s.near)) err(`System "${s.id}": near "${s.near}" is not a known system.`);
+  const range = data.settings?.scutRange;
+  for (const r of Array.isArray(range) ? range : range ? [range] : []) {
+    if (typeof r?.ly !== 'number' || !(r.ly > 0)) err('settings.scutRange: ly must be a positive number.');
+    if (!r?.reveal || typeof r.reveal.book !== 'number' || typeof r.reveal.chapter !== 'number') err('settings.scutRange: needs a reveal (book, chapter).');
+  }
+  for (const s of data.systems ?? []) {
+    if (s.alias != null && (typeof s.alias !== 'object' || !systemIds.has(s.alias.of))) err(`System "${s.id}": alias.of must name a known system.`);
+    if (s.guess != null) {
+      if (typeof s.guess !== 'object') err(`System "${s.id}": guess must be an object.`);
+      else {
+        if (!s.pos && s.kind !== 'near') err(`System "${s.id}": a guess needs "pos" (or a place it is near).`);
+        const r = s.guess.distSolLy95;
+        if (r != null && !(Array.isArray(r) && r.length === 2 && r.every((n) => typeof n === 'number' && Number.isFinite(n)) && r[0] <= r[1])) err(`System "${s.id}": guess.distSolLy95 must be [low, high].`);
+      }
+    }
+  }
   if (data.systems?.length) {
     const named = new Set<string>();
     for (const b of data.bobs) if (b.where) named.add(b.where);

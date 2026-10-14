@@ -5,7 +5,7 @@ import { BobChip, Card, SectionTitle, Tag } from '@/components/bits';
 import { Icon } from '@/components/icon';
 import { DashedRule } from '@/components/lanes';
 import { T } from '@/components/text';
-import { chapterDate, chapterHeadingSpoken, chapterLabel, locAt, monthYear, plural, settingLabels, yearText } from '@/core';
+import { chapterDate, chapterHeadingSpoken, chapterLabel, monthYear, plural, settingLabels, yearText, type RemoteVia } from '@/core';
 import { useOpenBob } from '@/hooks/use-open-bob';
 import { useApp } from '@/state/app';
 import { withAlpha } from '@/theme/identity';
@@ -95,36 +95,64 @@ export function FlashbackCard() {
   );
 }
 
+/** "Calling in from Sol · VR", or "Calling in · VR" when the data doesn't say from where. */
+export function remoteText(r: { from: string | null; via: RemoteVia | null }): string {
+  return `Calling in${r.from ? ` from ${r.from}` : ''}${r.via ? ` · ${VIA[r.via]}` : ''}`;
+}
+
+const VIA: Record<RemoteVia, string> = { vr: 'VR', android: 'android', comms: 'comms' };
+
 export function HereCard() {
   const { view, palette: p, colourOf } = useApp();
   const open = useOpenBob();
-  const { narrator, here, lostHere, travelling, time, setting, system } = view.chapter;
+  const { narrator, here, lostHere, travelling, time, setting, system, cast } = view.chapter;
   const labels = settingLabels(view);
   if (!narrator || !labels.place) return null;
   const when = view.chapter.ref.chapter.year != null ? monthYear(time) : 'now';
   // On a voyage the card lists the travelling party; the Bobs at the destination follow as one line.
   const voyage = setting === 'enroute' || setting === 'deep';
-  const rows = voyage ? [narrator, ...travelling] : [narrator, ...travelling, ...here.filter((h) => !travelling.includes(h))];
-  const ahead = voyage ? here : [];
-  // A chapter set in a system the narrator isn't in (he follows it over SCUT): say where he is.
-  const nl = setting === 'system' && time != null ? locAt(view, narrator, time) : null;
-  const remoteFrom = nl && !nl.notYet && !nl.transit && nl.loc && nl.loc !== system ? nl.loc : null;
+  const ids = voyage ? [narrator, ...travelling] : [narrator, ...travelling, ...here.filter((h) => !travelling.includes(h))];
+  // The rest of the cast: those there join the list, those calling in follow it.
+  const remote = view.chapter.remote;
+  type Row = { id: string; isOther: boolean; note: string | null };
+  const rows: Row[] = ids.map((id) => ({ id, isOther: false, note: id === narrator && remote ? remoteText(remote) : null }));
+  for (const c of cast) if (!c.remote && !rows.some((r) => r.id === c.id)) rows.push({ id: c.id, isOther: c.isOther, note: null });
+  for (const c of cast) {
+    if (!c.remote || travelling.includes(c.id)) continue;
+    const call = remoteText({ from: c.from, via: c.via === 'present' ? null : c.via });
+    const at = rows.findIndex((r) => r.id === c.id);
+    if (at >= 0) rows.splice(at, 1);
+    rows.push({ id: c.id, isOther: c.isOther, note: call });
+  }
+  const present = rows.filter((r) => !r.note).length;
+  const ahead = voyage ? here.filter((h) => !rows.some((r) => r.id === h)) : [];
   return (
     <Card>
       <View style={{ paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8 }}>
-        <SectionTitle title={`${labels.place}, ${when}`} right={<T variant="data" tone="ink3" style={{ fontSize: 11 }}>{voyage ? `${rows.length} aboard` : `${rows.length} here`}</T>} />
+        <SectionTitle title={`${labels.place}, ${when}`} right={<T variant="data" tone="ink3" style={{ fontSize: 11 }}>{voyage ? `${present} aboard` : `${present} here`}</T>} />
       </View>
-      {rows.map((id) => (
-        <Pressable key={id} onPress={() => open(id)} accessibilityRole="button" accessibilityLabel={id === narrator ? `${id}, narrating` : travelling.includes(id) ? `${id}, travelling with ${narrator}` : id}
-          style={({ pressed }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, paddingHorizontal: 14, borderTopWidth: 1, borderColor: p.line2, backgroundColor: pressed ? p.sel : id === narrator ? withAlpha(colourOf(id), 0.14) : 'transparent' })}>
-          <SwatchFor id={id} />
-          <View style={{ flex: 1 }}>
-            <T variant="row" weight={id === narrator ? '700' : '600'}>{id}</T>
-            {id === narrator && remoteFrom ? <T variant="secondary" tone="ink2" style={{ fontSize: 12 }}>{`Following events from ${remoteFrom}`}</T> : null}
-          </View>
-          {id === narrator ? <Tag text="POV" /> : view.info.get(id)!.isNew ? <Tag text="NEW" /> : null}
-        </Pressable>
-      ))}
+      {rows.map(({ id, isOther, note }) => {
+        const label = id === narrator ? `${id}, narrating${note ? `, ${note.toLowerCase()}` : ''}` : note ? `${id}, ${note.toLowerCase()}` : travelling.includes(id) ? `${id}, travelling with ${narrator}` : id;
+        const body = (
+          <>
+            {isOther ? <View style={{ width: 8, height: 22, borderRadius: 3, borderWidth: 1.5, borderColor: p.ink }} /> : <SwatchFor id={id} />}
+            <View style={{ flex: 1 }}>
+              <T variant="row" weight={id === narrator ? '700' : '600'}>{id}</T>
+              {note ? <T variant="secondary" tone="ink2" style={{ fontSize: 12 }}>{note}</T> : null}
+            </View>
+            {id === narrator ? <Tag text="POV" /> : !isOther && view.info.get(id)?.isNew ? <Tag text="NEW" /> : null}
+          </>
+        );
+        const rowStyle = { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10, minHeight: 44, paddingHorizontal: 14, borderTopWidth: 1, borderColor: p.line2 };
+        return isOther ? (
+          <View key={id} accessible accessibilityLabel={`${label}, not a Bob`} style={rowStyle}>{body}</View>
+        ) : (
+          <Pressable key={id} onPress={() => open(id)} accessibilityRole="button" accessibilityLabel={label}
+            style={({ pressed }) => ({ ...rowStyle, backgroundColor: pressed ? p.sel : id === narrator ? withAlpha(colourOf(id), 0.14) : 'transparent' })}>
+            {body}
+          </Pressable>
+        );
+      })}
       {ahead.length ? (
         <View style={{ minHeight: 40, paddingHorizontal: 14, paddingVertical: 10, borderTopWidth: 1, borderColor: p.line2 }}>
           <T variant="secondary" tone="ink2">

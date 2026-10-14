@@ -6,7 +6,7 @@ import raw from '@/data/tree-of-bob.json';
 import { buildModel, computeView, LY_PER_PC, mapState, type ProgressView, type TreeData } from '@/core';
 import type { Palette } from '@/theme/tokens';
 
-import { buildScene, lyLabel, scaleBarFor, viewportDiameter } from './scene';
+import { buildScene, convexHull2d, lyLabel, roundedHull, scaleBarFor, viewportDiameter } from './scene';
 
 const palette = { bg: '#fff', ink: '#000', ink2: '#444', ink3: '#888', line: '#ccc', scheme: 'light' } as unknown as Palette;
 const model = buildModel(raw as unknown as TreeData);
@@ -165,5 +165,49 @@ describe('viewportDiameter', () => {
     expect(viewportDiameter(200, 20)).toBe('65 ly');
     expect(viewportDiameter(100, 0)).toBe('');
     expect(viewportDiameter(100, Number.NaN)).toBe('');
+  });
+});
+
+describe('SCUT network outline', () => {
+  const minDist = (x: number, y: number, hull: number[]) => {
+    const n = hull.length / 2;
+    let best = Infinity;
+    for (let i = 0; i < n; i++) {
+      const ax = hull[i * 2], ay = hull[i * 2 + 1], bx = hull[((i + 1) % n) * 2], by = hull[((i + 1) % n) * 2 + 1];
+      const dx = bx - ax, dy = by - ay;
+      const t = n === 1 || dx * dx + dy * dy === 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+      best = Math.min(best, Math.hypot(x - (ax + t * dx), y - (ay + t * dy)));
+    }
+    return best;
+  };
+  it('keeps the hull of a square with a point inside, without duplicates or collinear middles', () => {
+    const h = convexHull2d([0, 0, 10, 0, 10, 10, 0, 10, 5, 5, 0, 0, 5, 0]);
+    expect(h.length / 2).toBe(4);
+    expect(convexHull2d([])).toEqual([]);
+    expect(convexHull2d([3, 4, 3, 4])).toEqual([3, 4]);
+    expect(convexHull2d([0, 0, 1, 1, 2, 2]).length / 2).toBe(2);
+  });
+  it('outlines every hull at the pad distance, for 1, 2 and many points, in either winding', () => {
+    for (const pts of [[5, 5], [0, 0, 30, 10], [0, 0, 40, 0, 40, 30, 0, 30, 20, 50]]) {
+      const hull = convexHull2d(pts);
+      for (const h of [hull, hull.length > 4 ? [...Array(hull.length / 2).keys()].reverse().flatMap((i) => [hull[i * 2], hull[i * 2 + 1]]) : hull]) {
+        const o = roundedHull(h, 16);
+        expect(o.length).toBeGreaterThan(8);
+        for (let i = 0; i < o.length; i += 2) expect(minDist(o[i], o[i + 1], h)).toBeCloseTo(16, 0);
+      }
+    }
+  });
+});
+
+describe('SCUT pulse', () => {
+  it('from every start, spreads one hop per link without skipping a hop', () => {
+    const s = scene(at(2, 67));
+    expect(s.scut.length).toBeGreaterThan(1);
+    expect(s.scutHops).toHaveLength(s.scutRoots * s.scut.length);
+    for (let r = 0; r < s.scutRoots; r++) {
+      const hops = s.scutHops.slice(r * s.scut.length, (r + 1) * s.scut.length);
+      expect(Math.min(...hops)).toBe(0);
+      [...new Set(hops)].sort((a, b) => a - b).forEach((h, i) => expect(h).toBe(i));
+    }
   });
 });

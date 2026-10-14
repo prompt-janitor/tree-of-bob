@@ -4,6 +4,14 @@ import { describe, expect, it } from 'vitest';
 import raw from '../data/tree-of-bob.json';
 import {
   agoText,
+  DEFAULT_LAYERS,
+  filterMapState,
+  readLayers,
+  scutLabel,
+  scutRangeLy,
+  scutNetwork,
+  scutSpoken,
+  scutText,
   BACKGROUND_RADIUS_LY,
   backgroundStars,
   buildModel,
@@ -17,6 +25,7 @@ import {
   groupVoyages,
   headingSetting,
   lineage,
+  locAt,
   mapSummary,
   otherStatus,
   pivotFit,
@@ -26,8 +35,10 @@ import {
   type MapVoyage,
   knownPlaces,
   LY_PER_PC,
+  NEAR_SAME_POINT_LY,
   mapState,
   placePositions,
+  placeGuess,
   planeFoot,
   heightAbove,
   project,
@@ -79,6 +90,8 @@ describe('knownPlaces', () => {
       for (const c of model.chapters.slice(0, v.index + 1)) {
         const s = headingSetting(model, c.chapter.place)?.system ?? systemIn(model, c.chapter.place);
         if (s) named.add(s);
+        // A chapter already read names the system it is set in.
+        if (rank({ book: c.book.id, chapter: c.chapter.n }) <= v.P && c.chapter.system) named.add(c.chapter.system);
       }
       for (const k of knownPlaces(v)) expect(named, `B${ref.book.id} Ch ${ref.chapter.n}: ${k}`).toContain(k);
     }
@@ -157,7 +170,8 @@ describe('placePositions', () => {
     expect(a).toEqual(pos.get('Sagittarius A*'));
   });
   it('leaves a place far from its anchor, in an unknown direction, unplaced', () => {
-    expect(pos.has('Skippyland')).toBe(false);
+    const far = (data.systems ?? []).filter((s) => s.kind === 'near' && !s.pos && (s.offsetLy ?? 0) > NEAR_SAME_POINT_LY);
+    for (const s of far) expect(pos.has(s.id), s.id).toBe(false);
   });
 });
 
@@ -437,7 +451,7 @@ describe('routes: travel history', () => {
 });
 
 describe('voyage words', () => {
-  const base: MapVoyage = { who: 'X', isOther: false, from: 'A', to: 'B', departed: 2160, departKnown: true, departInferred: false, arrives: null, fraction: null };
+  const base: MapVoyage = { who: 'X', isOther: false, from: 'A', to: 'B', departed: 2160, departKnown: true, departInferred: false, arrives: null, fraction: null, estimate: null, scut: false };
   it('spanText rounds down', () => {
     expect(spanText(0.05)).toBe('just left');
     expect(spanText(0.5)).toBe('6 months');
@@ -532,12 +546,14 @@ describe('mapSummary (header card)', () => {
     expect(s.here).toBe(here.bobs.length - 1 + here.others.length);
     expect(s.enRoute).toBe(st.voyages.length);
   });
-  it('B1 ch 2: no systems named yet, narrator not a Bob', () => {
+  it('B1 ch 2: only Sol named (ch 1 is set there), narrator not a Bob', () => {
     const v = at(1, 2);
-    const s = mapSummary(v, mapState(v, mapDate(v)));
+    const st = mapState(v, mapDate(v));
+    const s = mapSummary(v, st);
     expect(s.where).toBe('none');
-    expect(s.empty).toBe(true);
-    expect(s.here + s.systems + s.enRoute).toBe(0);
+    expect(st.places.map((p) => p.id)).toEqual(['Sol']);
+    expect(s.here + s.enRoute).toBe(0);
+    expect(at(1, 1).chapter.system).toBeNull();
   });
   it('counts only people the map state holds, for every 5th chapter', () => {
     for (const ref of sweep) {
@@ -547,6 +563,128 @@ describe('mapSummary (header card)', () => {
       const people = st.places.reduce((n, p) => n + p.bobs.length + p.others.length, 0) + st.voyages.length;
       expect(s.here + s.enRoute + (s.where === 'place' || s.where === 'transit' ? 1 : 0)).toBeLessThanOrEqual(people);
       expect(s.systems).toBeLessThanOrEqual(st.places.length);
+    }
+  });
+});
+
+describe('calling in on the real data', () => {
+  it('shows in the cast only Bobs active on the chapter date', () => {
+    for (const ref of model.chapters) {
+      const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
+      const t = v.chapter.time;
+      if (t == null) continue;
+      for (const c of v.chapter.cast) {
+        if (c.isOther) continue;
+        const s = locAt(v, c.id, t);
+        expect(s && !s.notYet && s.status, `B${ref.book.id} Ch ${ref.chapter.n}: ${c.id}`).toBe('active');
+      }
+    }
+  });
+  it('names only places the reader has met', () => {
+    for (const ref of model.chapters) {
+      const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
+      const known = knownPlaces(v);
+      for (const p of [v.chapter.remote?.from, ...v.chapter.cast.map((c) => c.from)]) if (p) expect(known.has(p), `B${ref.book.id} Ch ${ref.chapter.n}`).toBe(true);
+    }
+  });
+});
+
+describe('SCUT network layer', () => {
+  it('reads old saves (and the old Chapter mode) as Show, and keeps Volume and Hide', () => {
+    expect(readLayers({}).scut).toBe('show');
+    expect(readLayers({ ...DEFAULT_LAYERS, scut: 'chapter' }).scut).toBe('show');
+    for (const m of ['volume', 'hide'] as const) expect(readLayers({ ...DEFAULT_LAYERS, scut: m }).scut).toBe(m);
+  });
+
+  it('has no members, text or name before SCUT is met, and names the layer Bobnet only once the books have', () => {
+    for (const ref of sweep) {
+      const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
+      const named = [...v.scut, ...v.milestones].some((r) => /bobnet/i.test(r.text ?? ''));
+      expect(scutLabel(v)).toBe(named ? 'Bobnet' : 'SCUT');
+      if (v.scut.length) continue;
+      for (const t of [mapDate(v), v.latest ?? mapDate(v)]) expect(scutNetwork(mapState(v, t)).ids).toEqual([]);
+    }
+  });
+
+  it('counts only known places with a Bob on SCUT there, and reaches as far as the farthest', () => {
+    for (const ref of sweep) {
+      const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
+      const known = knownPlaces(v);
+      for (const t of [mapDate(v), v.latest ?? mapDate(v)]) {
+        const st = mapState(v, t);
+        const n = scutNetwork(st);
+        for (const id of n.ids) {
+          expect(known.has(id), `B${ref.book.id} Ch ${ref.chapter.n}: ${id}`).toBe(true);
+          expect(st.places.find((p) => p.id === id)!.bobs.some((b) => (v.info.get(b)?.scut?.year ?? Infinity) <= t)).toBe(true);
+        }
+        const far = Math.max(-Infinity, ...st.places.filter((p) => p.scut && p.pos).map((p) => distanceLy(p.pos!)));
+        if (n.reachLy != null) expect(n.reachLy).toBeCloseTo(far, 6);
+      }
+    }
+  });
+
+  it('Show and Volume keep every system on the network and all its links; Hide drops the links', () => {
+    for (const ref of sweep) {
+      const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
+      const st = mapState(v, mapDate(v));
+      const members = st.places.filter((p) => p.scut).map((p) => p.id);
+      for (const mode of ['show', 'volume'] as const) {
+        const on = filterMapState(v, st, { ...DEFAULT_LAYERS, scut: mode });
+        for (const id of members) expect(on.places.some((p) => p.id === id), id).toBe(true);
+        expect(on.scutLinks).toEqual(st.scutLinks);
+      }
+      expect(filterMapState(v, st, { ...DEFAULT_LAYERS, scut: 'hide' }).scutLinks).toEqual([]);
+      const noBobs = filterMapState(v, st, { ...DEFAULT_LAYERS, scut: 'show', bobs: 'hide' });
+      for (const id of members) expect(noBobs.places.find((p) => p.id === id)?.bobs).toEqual([]);
+    }
+  });
+
+  it('reaches SCUT\'s range only once the reader has learnt it', () => {
+    const r = data.settings?.scutRange;
+    const first = (Array.isArray(r) ? r : r ? [r] : []).reduce((m, x) => Math.min(m, rank(x.reveal)), Infinity);
+    for (const ref of sweep) {
+      const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
+      expect(scutRangeLy(v) != null).toBe(v.P >= first);
+    }
+  });
+
+  it('words the network', () => {
+    const n = { ids: ['A', 'B'], placed: ['A', 'B'], origin: 'Sol', reachLy: 29.6 };
+    expect(scutText('Bobnet', n, null)).toBe('Bobnet · 2 systems · 30 ly from Sol');
+    expect(scutText('Bobnet', n, null, 1)).toBe('Bobnet · 2 systems · 30 ly');
+    expect(scutText('Bobnet', n, null, 2)).toBe('Bobnet · 2 systems');
+    expect(scutText('SCUT', { ...n, ids: ['A'], reachLy: 0.2 }, null)).toBe('SCUT · 1 system');
+    expect(scutText('Bobnet', n, { ...n, ids: ['A', 'B', 'C'] })).toBe('Bobnet · 2 systems · 30 ly from Sol · NOW 3');
+    expect(scutText('Bobnet', { ...n, ids: [] }, null)).toBeNull();
+    expect(scutSpoken('Bobnet', n, null)).toBe(' Bobnet: 2 systems, farthest 30 light years from Sol.');
+    expect(scutSpoken('Bobnet', { ...n, ids: [] }, { ...n, ids: ['A', 'B', 'C'] })).toBe(' Bobnet: none on this date; 3 at NOW.');
+  });
+});
+
+describe('a place under an earlier name', () => {
+  it('keeps the later name hidden until it is revealed', () => {
+    for (const s of (data.systems ?? []).filter((x) => x.alias)) {
+      const first = model.chapters.findIndex((r) => [r.chapter.place, r.chapter.system, r.chapter.narratorFrom, ...(r.chapter.cast ?? []).map((c) => c.from)].some((p) => typeof p === 'string' && p.includes(s.alias!.of)));
+      for (const ref of model.chapters.slice(0, Math.max(0, first))) {
+        const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
+        if (!knownPlaces(v).has(s.id)) continue;
+        expect(knownPlaces(v).has(s.alias!.of), `B${ref.book.id} Ch ${ref.chapter.n}`).toBe(false);
+        expect(JSON.stringify(mapState(v, mapDate(v)).places.map((p) => p.id))).not.toContain(s.alias!.of);
+      }
+    }
+  });
+});
+
+describe('best-guess positions', () => {
+  it('marks every guessed system, and a place sitting on one, and only those', () => {
+    const pos = placePositions(model);
+    for (const s of data.systems ?? []) {
+      const g = placeGuess(model, s.id);
+      if (s.guess) {
+        expect(g, s.id).not.toBeNull();
+        if (s.pos) expect(pos.has(s.id)).toBe(true);
+      } else if (s.pos) expect(g, s.id).toBeNull();
+      if (s.alias && s.kind === 'near' && s.offsetLy === 0) expect(g).toEqual(placeGuess(model, s.near!));
     }
   });
 });

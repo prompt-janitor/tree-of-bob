@@ -28,10 +28,16 @@ export function headerTexts(view: ProgressView, state: MapState) {
   let who: string;
   let where: string;
   let whereA11y: string;
+  const remote = !!(s.narrator && s.where === 'place' && view.chapter.remote?.from && view.chapter.system);
   if (!s.narrator) {
     who = chName;
     where = 'not narrated by a Bob';
     whereA11y = `not narrated by a Bob${s.place ? `, set at ${s.place}` : ''}`;
+  } else if (remote) {
+    // Calling in: where the chapter is set; where he is leads the second line.
+    who = s.narrator;
+    where = view.chapter.system!;
+    whereA11y = `calling in to ${view.chapter.system} from ${s.place}`;
   } else if (s.where === 'place') {
     who = s.narrator;
     where = s.place!;
@@ -62,7 +68,7 @@ export function headerTexts(view: ProgressView, state: MapState) {
   if (s.here) counts.push(nb(`${s.here} more here`));
   if (s.systems) counts.push(nb(`${s.systems} other ${s.systems === 1 ? 'system' : 'systems'}`));
   if (s.enRoute) counts.push(nb(`${s.enRoute} en route`));
-  const line2 = s.empty ? `${nb(date)} · no systems named yet` : [nb(date), ...(counts.length ? counts : [s.where === 'place' ? 'alone here' : 'nobody else placed'])].join(' · ');
+  const line2 = s.empty ? `${nb(date)} · no systems named yet` : [...(remote ? [`Calling in from ${s.place}`] : []), nb(date), ...(counts.length ? counts : [s.where === 'place' ? 'alone here' : 'nobody else placed'])].join(' · ');
   const a11yCounts = [
     s.here ? `${s.here} ${s.here === 1 ? 'other' : 'others'} here` : null,
     s.systems ? `${s.systems} other ${s.systems === 1 ? 'system' : 'systems'} occupied` : null,
@@ -70,10 +76,10 @@ export function headerTexts(view: ProgressView, state: MapState) {
   ].filter(Boolean);
   const read = view.latest != null && view.chapter.flashbackYear != null ? `; you have read to ${monthYearLong(view.latest)}` : '';
   const a11y = `${chName}. ${s.narrator ? `${s.narrator}, narrator, ` : ''}${whereA11y}, ${monthYearLong(state.time)}${read}. ${s.empty ? 'No systems named yet.' : a11yCounts.length ? `${a11yCounts.join(', ')}.` : 'Nobody else on the map.'}`;
-  return { summary: s, who, where, line2, a11y };
+  return { summary: s, who, where, line2, a11y, remote };
 }
 
-export function ChapterHeaderCard({ state, onPress, onShowList, style }: { state: MapState; onPress: () => void; onShowList: () => void; style?: StyleProp<ViewStyle> }) {
+export function ChapterHeaderCard({ state, onPress, onShowList, spokenExtra, style }: { state: MapState; onPress: () => void; onShowList: () => void; spokenExtra?: string; style?: StyleProp<ViewStyle> }) {
   const { view, colourOf, palette: p } = useApp();
   const tx = headerTexts(view, state);
   const s = tx.summary;
@@ -83,7 +89,7 @@ export function ChapterHeaderCard({ state, onPress, onShowList, style }: { state
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
-        accessibilityLabel={tx.a11y}
+        accessibilityLabel={tx.a11y + (spokenExtra ?? '')}
         accessibilityHint={s.narrator ? 'Shows him on the map' : undefined}
         accessibilityActions={[{ name: 'showList', label: 'Show as list' }]}
         onAccessibilityAction={(e) => {

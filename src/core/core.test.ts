@@ -182,12 +182,15 @@ describe('tree at Book 2 ch 32', () => {
   const v = at(2, 32);
   const rows = treeRows(v, new Set(), { kind: 'everyone' });
   const restAt = rows.findIndex((r) => r.kind === 'header' && r.text === 'Everyone else');
-  it('keeps "In this chapter" to the narrator, and puts the rest of his system next', () => {
+  it('keeps "In this chapter" to the narrator, and puts the rest of his system and the cast there next', () => {
     const sec = bySection(rows);
     expect(sec['In this chapter'].filter((r) => !r.dim).map((r) => r.id)).toEqual(['Bill']);
     const here = sec['Also in Epsilon Eridani'];
-    expect(here.filter((r) => !r.dim).map((r) => r.id).sort()).toEqual([...v.chapter.here].sort());
-    expect(here.map((r) => r.id)).not.toContain('Linus');
+    const calling = v.chapter.cast.filter((c) => c.remote).map((c) => c.id);
+    const present = v.chapter.cast.filter((c) => !c.remote && !c.isOther).map((c) => c.id);
+    const expected = [...new Set([...v.chapter.here, ...present])].filter((id) => !calling.includes(id));
+    expect(here.filter((r) => !r.dim).map((r) => r.id).sort()).toEqual(expected.sort());
+    expect(here.map((r) => r.id).includes('Linus')).toBe(present.includes('Linus'));
   });
   it('folds a batch of copies made together into one row, and opens it on request', () => {
     const group = rows.slice(0, restAt).find((r) => r.kind === 'group');
@@ -271,7 +274,13 @@ describe('chapter settings from headings', () => {
     const v = at(3, 43);
     expect(v.chapter.setting).toBe('deep');
     expect(v.chapter.travelling).toEqual(['Daedalus']);
-    expect(Object.keys(bySection(treeRows(v, new Set(), { kind: 'everyone' })))).toEqual(['In this chapter', 'Travelling with Icarus', 'Everyone else']);
+    expect(Object.keys(bySection(treeRows(v, new Set(), { kind: 'everyone' }))).filter((k) => k !== 'Calling in')).toEqual(['In this chapter', 'Travelling with Icarus', 'Everyone else']);
+  });
+  it('never titles a tree section from a missing system', () => {
+    for (const ref of model.chapters) {
+      const rows = treeRows(computeView(model, { book: ref.book.id, chapter: ref.chapter.n }), new Set(), { kind: 'everyone' });
+      for (const r of rows) if (r.kind === 'header') expect(r.text, `B${ref.book.id} Ch ${ref.chapter.n}`).not.toMatch(/null|undefined/);
+    }
   });
   it('moves a narrator into transit when the heading is a voyage and his records lag', () => {
     const v = at(1, 13);
@@ -423,10 +432,11 @@ describe('other replicants\' fates in journeys', () => {
 });
 
 describe('place names', () => {
-  it('names no wormhole before a chapter heading does', () => {
-    const firstHeading = model.chapters.findIndex((r) => /wormhole/i.test(r.chapter.place ?? ''));
-    expect(firstHeading).toBeGreaterThan(0);
-    for (let i = 0; i < firstHeading; i++) {
+  it('names no wormhole before a chapter heading does, or a chapter set there is read', () => {
+    const first = model.chapters.findIndex((r) => /wormhole/i.test(`${r.chapter.place ?? ''} ${r.chapter.system ?? ''}`));
+    expect(first).toBeGreaterThan(0);
+    const last = /wormhole/i.test(model.chapters[first].chapter.place ?? '') ? first - 1 : first;
+    for (let i = 0; i <= last; i++) {
       const r = model.chapters[i];
       const v = computeView(model, { book: r.book.id, chapter: r.chapter.n });
       for (const p of knownPlaces(v)) expect(p).not.toMatch(/wormhole/i);
@@ -441,7 +451,7 @@ describe('map layers', () => {
   const model = buildModel(data);
   const sweep = model.chapters.filter((_, i) => i % 7 === 0);
   it('only ever removes: every place, person and journey kept is in the full map state', () => {
-    const all = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show' } as const;
+    const all = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show', scut: 'show' } as const;
     const variants = [DEFAULT_LAYERS, all, { ...all, empty: 'hide', others: 'hide', journeys: 'hide', presence: 'hide' } as const];
     for (const ref of sweep) {
       const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
@@ -535,5 +545,161 @@ describe('release notes', () => {
   it('have an entry for the current version, newest first, each with a note', () => {
     expect(releases[0].version).toBe(app.expo.version);
     for (const r of releases) expect(r.notes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('calling in', () => {
+  const src = { confidence: 'high' as const, sources: ['test'] };
+  const r = (chapter: number) => ({ book: 1, chapter });
+  const fixture: TreeData = {
+    settings: { root: 'Bob' },
+    books: [{
+      id: 1, title: 'Test', chapters: [
+        { n: 1, pov: 'Bob', place: 'Sol', year: 2100 },
+        { n: 2, pov: 'Bob', place: 'Epsilon Eridani', system: 'Epsilon Eridani', narratorFrom: 'Sol', narratorVia: 'vr', year: 2101,
+          cast: [{ id: 'Riker', from: 'Sol', via: 'vr' }, { id: 'Bill', from: 'Epsilon Eridani', via: 'present' }, { id: 'Mulder', from: 'Sol', via: 'comms' }] },
+        { n: 3, pov: 'Riker', place: 'Sol', year: 2102 },
+        { n: 4, pov: 'Bob', place: 'Epsilon Eridani', narratorFrom: 'Delta Pavonis', year: 2103 },
+        { n: 5, pov: 'Bob', place: 'Epsilon Eridani', year: 2104 },
+        { n: 6, pov: 'Homer', place: 'Sol', narratorFrom: 'Epsilon Eridani', year: 2105 },
+        { n: 7, pov: 'Bob', place: 'Vulcan', system: 'Epsilon Eridani', narratorFrom: null, year: 2106 },
+      ],
+    }],
+    bobs: [
+      { id: 'Bob', parent: null, born: 2099, where: 'Sol', reveal: r(1), ...src },
+      { id: 'Riker', parent: 'Bob', born: 2099, where: 'Sol', reveal: r(1), ...src },
+      { id: 'Homer', parent: 'Bob', born: 2099, where: 'Sol', reveal: r(1), ...src },
+      { id: 'Bill', parent: 'Bob', born: 2099, where: 'Epsilon Eridani', reveal: r(1), ...src },
+      { id: 'Mulder', parent: 'Bill', born: 2099, where: 'Sol', reveal: r(5), ...src },
+    ],
+    moves: [{ bob: 'Homer', kind: 'depart', year: 2100.5, from: 'Sol', to: 'Epsilon Eridani', reveal: r(1), ...src }],
+    fates: [],
+    systems: [
+      { id: 'Sol', kind: 'star', pos: { x: 0, y: 0, z: 0 }, ...src },
+      { id: 'Epsilon Eridani', kind: 'star', pos: { x: 1.9, y: 2.5, z: -0.6 }, ...src },
+      { id: 'Delta Pavonis', kind: 'star', pos: { x: 1.1, y: -2.5, z: -5.1 }, ...src },
+    ],
+  };
+  const m = buildModel(fixture);
+  const v = (chapter: number, finished = false) => computeView(m, { book: 1, chapter, finished });
+
+  it('validates the new fields, warning about a cast member met later', () => {
+    const res = validateData(fixture);
+    expect(res.errors).toEqual([]);
+    expect(res.warnings.some((w) => w.includes('Mulder') && w.includes('before he is revealed'))).toBe(true);
+    const bad = validateData({ ...fixture, books: [{ ...fixture.books[0], chapters: [{ n: 1, system: 'Nowhere', narratorVia: 'tv' as never, cast: [{ id: 'Nobody', via: 'mail' as never }] }] }] });
+    expect(bad.errors.filter((e) => e.startsWith('Book 1 ch 1')).length).toBe(4);
+  });
+
+  it('shows where (a place already met) and how the narrator calls in, from the chapter data, before it is read', () => {
+    expect(v(2).chapter.remote).toEqual({ from: 'Sol', via: 'vr' });
+    expect(v(2).chapter.system).toBe('Epsilon Eridani');
+    // Delta Pavonis is not a place the reader has met yet: not named.
+    expect(v(4).chapter.remote).toEqual({ from: null, via: null });
+  });
+
+  it('calls in from a voyage when the map has the caller on his way, and not when his position is unknown', () => {
+    const withCast = (moves: TreeData['moves']): TreeData => ({
+      ...fixture,
+      moves,
+      books: [{ ...fixture.books[0], chapters: fixture.books[0].chapters.map((c) => (c.n === 2 ? { ...c, cast: [{ id: 'Homer', from: null, via: 'vr' as const }] } : c)) }],
+    });
+    const arrive = { bob: 'Homer', kind: 'arrive' as const, year: 2110, from: 'Sol', to: 'Epsilon Eridani', reveal: r(1), ...src };
+    const known = computeView(buildModel(withCast([...fixture.moves, arrive])), { book: 1, chapter: 2 });
+    expect(mapState(known, known.chapter.time!).calls.filter((c) => !c.pov)).toEqual([{ who: 'Homer', isOther: false, from: null, to: 'Epsilon Eridani', pov: false, via: 'vr' }]);
+    const unknown = computeView(buildModel(withCast(fixture.moves)), { book: 1, chapter: 2 });
+    expect(mapState(unknown, unknown.chapter.time!).calls.filter((c) => !c.pov)).toEqual([]);
+  });
+
+  it('estimates where a caller with no revealed arrival is from the usual speed, and calls in from there', () => {
+    // Mulder (revealed at ch 5) made a revealed trip; Homer is on his way with no arrival.
+    const trip = [
+      { bob: 'Riker', kind: 'depart' as const, year: 2099.1, from: 'Sol', to: 'Delta Pavonis', reveal: r(1), ...src },
+      { bob: 'Riker', kind: 'arrive' as const, year: 2099.6, from: 'Sol', to: 'Delta Pavonis', reveal: r(1), ...src },
+      { bob: 'Riker', kind: 'depart' as const, year: 2099.7, from: 'Delta Pavonis', to: 'Sol', reveal: r(1), ...src },
+      { bob: 'Riker', kind: 'arrive' as const, year: 2100.2, from: 'Delta Pavonis', to: 'Sol', reveal: r(1), ...src },
+    ];
+    const f2: TreeData = {
+      ...fixture,
+      moves: [...fixture.moves, ...trip],
+      books: [{ ...fixture.books[0], chapters: fixture.books[0].chapters.map((c) => (c.n === 2 ? { ...c, cast: [{ id: 'Homer', from: null, via: 'vr' as const }] } : c)) }],
+    };
+    const v2 = computeView(buildModel(f2), { book: 1, chapter: 2 });
+    const st = mapState(v2, v2.chapter.time!);
+    const homer = st.voyages.find((x) => x.who === 'Homer')!;
+    expect(homer.fraction).toBeNull();
+    expect(homer.estimate).toBeGreaterThan(0.03);
+    expect(homer.estimate).toBeLessThanOrEqual(0.97);
+    expect(st.calls.some((c) => c.who === 'Homer' && c.from === null)).toBe(true);
+  });
+
+  it('counts a place at zero distance from the chapter\'s star as being there', () => {
+    const f2: TreeData = {
+      ...fixture,
+      systems: [...fixture.systems!, { id: 'Ring', kind: 'near', near: 'Epsilon Eridani', offsetLy: 0, pos: null, ...src }],
+      books: [{ ...fixture.books[0], chapters: fixture.books[0].chapters.map((c) => (c.n === 2 ? { ...c, narratorFrom: 'Ring', narratorVia: null, cast: [{ id: 'Riker', from: 'Ring' }, { id: 'Bill', from: 'Ring', via: 'android' as const }] } : c)) }],
+    };
+    const v2 = computeView(buildModel(f2), { book: 1, chapter: 2 });
+    expect(v2.chapter.remote).toBeNull();
+    expect(v2.chapter.cast).toEqual([
+      { id: 'Riker', isOther: false, from: null, via: null, remote: false },
+      { id: 'Bill', isOther: false, from: null, via: 'android', remote: true },
+    ]);
+  });
+
+  it('falls back to his records when the data does not say, and to none when it says he is there', () => {
+    expect(v(5).chapter.remote).toEqual({ from: 'Sol', via: null });
+    const last = v(7, true);
+    expect(last.chapter.system).toBe('Epsilon Eridani');
+    expect(last.chapter.remote).toBeNull();
+  });
+
+  it('never infers a move from an unread chapter\'s calling-in data; once read, only to a destination already known', () => {
+    expect(v(6).chapter.remote).toEqual({ from: 'Epsilon Eridani', via: null });
+    expect(v(6).info.get('Homer')!.now).toBe('In transit');
+    expect(v(7).info.get('Homer')!.now).toBe('Epsilon Eridani');
+  });
+
+  it('treats calling in from an unnamed place as remote, with no line and no inferred move', () => {
+    const f2: TreeData = {
+      ...fixture,
+      books: [{ ...fixture.books[0], chapters: fixture.books[0].chapters.map((c) => (c.n === 6 || c.n === 7 ? { ...c, narratorFrom: null, narratorVia: 'vr' as const } : c)) }],
+    };
+    const m2 = buildModel(f2);
+    const v7 = computeView(m2, { book: 1, chapter: 7 });
+    expect(v7.info.get('Homer')!.now).toBe('In transit');
+    expect(v7.chapter.remote).toEqual({ from: null, via: 'vr' });
+    expect(mapState(v7, v7.chapter.time!).calls).toEqual([]);
+  });
+
+  it('sets an unread chapter by its heading alone, and by its data once read', () => {
+    const f2: TreeData = { ...fixture, books: [{ ...fixture.books[0], chapters: fixture.books[0].chapters.map((c) => (c.n === 3 ? { ...c, system: 'Delta Pavonis' } : c)) }] };
+    const m2 = buildModel(f2);
+    const before = computeView(m2, { book: 1, chapter: 3 });
+    expect(before.chapter.system).toBe('Sol');
+    expect(knownPlaces(before).has('Delta Pavonis')).toBe(false);
+    expect(mapState(before, before.chapter.time!).calls.some((c) => c.to === 'Delta Pavonis' || c.from === 'Delta Pavonis')).toBe(false);
+    expect(knownPlaces(computeView(m2, { book: 1, chapter: 4 })).has('Delta Pavonis')).toBe(true);
+  });
+
+  it('lists the current chapter\'s cast, only people already met', () => {
+    expect(v(2).chapter.cast).toEqual([
+      { id: 'Riker', isOther: false, from: 'Sol', via: 'vr', remote: true },
+      { id: 'Bill', isOther: false, from: null, via: 'present', remote: false },
+    ]);
+    expect(v(3).chapter.cast).toEqual([]);
+  });
+
+  it('draws the narrator\'s and the cast\'s links, keeps both ends under the default layers, and hides callers with the Bobs layer', () => {
+    const view = v(2);
+    const state = mapState(view, view.chapter.time!);
+    expect(state.calls).toEqual([
+      { who: 'Bob', isOther: false, from: 'Sol', to: 'Epsilon Eridani', pov: true, via: 'vr' },
+      { who: 'Riker', isOther: false, from: 'Sol', to: 'Epsilon Eridani', pov: false, via: 'vr' },
+    ]);
+    const shown = filterMapState(view, state, { ...DEFAULT_LAYERS, empty: 'hide' });
+    expect(shown.calls.length).toBe(2);
+    expect(shown.places.map((p) => p.id).sort()).toEqual(['Epsilon Eridani', 'Sol']);
+    expect(filterMapState(view, state, { ...DEFAULT_LAYERS, bobs: 'hide' }).calls).toEqual([]);
   });
 });

@@ -228,6 +228,12 @@ function useRoutes(view: ProgressView, t: number) {
   return useMemo(() => routes(view, t), [view, t]);
 }
 
+/** A light-year distance, in thousands for galactic ones ("27,300"). */
+function lyRound(ly: number): string {
+  const r = ly >= 1000 ? Math.round(ly / 100) * 100 : Math.round(ly);
+  return r.toLocaleString('en-US');
+}
+
 export function PlaceContent({ id, view, state, onSelect }: ContentProps & { id: string }) {
   const t = state.time;
   const hist = useRoutes(view, t);
@@ -243,6 +249,7 @@ export function PlaceContent({ id, view, state, onSelect }: ContentProps & { id:
     if (me && there && narrator) sub.push(`${Math.round(distanceLy(me, there))} ly from ${narrator}`);
     if (pl?.scut) sub.push('on SCUT');
   }
+  const guess = pl?.guess ? ['Best guess position', pl.guess.candidate, pl.guess.rangeLy ? `${lyRound(pl.guess.rangeLy[0])}–${lyRound(pl.guess.rangeLy[1])} ly from Sol` : null].filter(Boolean).join(' · ') : null;
   if (me && Math.abs(me.z * LY_PER_PC) > 3) sub.push(`${Math.round(Math.abs(me.z * LY_PER_PC))} ly ${me.z > 0 ? 'above' : 'below'} the galactic plane`);
   const people = pl ? [...[...pl.bobs].sort((a, b) => Number(b === narrator) - Number(a === narrator)), ...pl.others] : [];
   const lostBobs = pl?.lost ?? [];
@@ -252,6 +259,7 @@ export function PlaceContent({ id, view, state, onSelect }: ContentProps & { id:
   });
   return (
     <View>
+      {guess ? <Sub text={guess} /> : null}
       {sub.length ? <Sub text={sub.join(' · ')} /> : null}
       {people.length ? people.map((p) => <PersonRow key={p} id={p} note={stayText(hist.get(p), id, t)} onSelect={onSelect} />) : pl?.presence.length ? null : <Line text="Nobody here on this date." />}
       {[...new Set(pl?.presence.map(presenceText) ?? [])].map((text) => <Line key={text} text={text} />)}

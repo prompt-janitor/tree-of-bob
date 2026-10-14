@@ -2,10 +2,12 @@
 // All screens read from a ProgressView; none of them touch the raw data file.
 import {
   chapterIndex,
-  headingSetting,
+  chapterSetting,
   narratorOf,
   rank,
   revealYear,
+  samePlace,
+  systemIn,
   type ChapterRef,
   type Model,
   type Setting,
@@ -13,10 +15,12 @@ import {
 import type {
   Alternative,
   BobRecord,
+  CastRecord,
   FateRecord,
   MilestoneRecord,
   MoveRecord,
   OtherRecord,
+  RemoteVia,
   Reveal,
   ScutRecord,
   Status,
@@ -65,7 +69,7 @@ export interface ChapterContext {
   time: number | null;
   /** Set only when the chapter is set earlier than NOW: the chapter's year. */
   flashbackYear: number | null;
-  /** Where the heading sets the chapter (see headingSetting); from the narrator's records when it doesn't say. */
+  /** Where the heading sets the chapter (see chapterSetting); from the narrator's records when it doesn't say. */
   setting: Setting['kind'] | null;
   /** The system the chapter is set in, or heading for ("En route to"). */
   system: string | null;
@@ -75,6 +79,22 @@ export interface ChapterContext {
   travelling: string[];
   /** Bobs lost at that system on or before the chapter date. */
   lostHere: string[];
+  /** The narrator takes part from another system (in VR, through an android, over comms): where he is (null when the
+   * data doesn't name it) and how. From the chapter's data; without it, from his records on the chapter date. */
+  remote: { from: string | null; via: RemoteVia | null } | null;
+  /** Who else takes part in the chapter, from its cast: only people the reader has already met. */
+  cast: CastMember[];
+}
+
+/** Someone taking part in the chapter, there or from somewhere else. */
+export interface CastMember {
+  id: string;
+  isOther: boolean;
+  /** Where he is (null: not named, or between the stars). */
+  from: string | null;
+  via: 'present' | RemoteVia | null;
+  /** He takes part from somewhere other than where the chapter is set. */
+  remote: boolean;
 }
 
 export interface NewInChapter {
@@ -83,6 +103,7 @@ export interface NewInChapter {
   fates: FateRecord[];
   scut: ScutRecord[];
   milestones: MilestoneRecord[];
+  /** Who called in to it from another system (not counted in total). */
   total: number;
 }
 
@@ -185,7 +206,7 @@ export function computeView(model: Model, progress: Progress): ProgressView {
   }
   for (const m of moves) info.get(m.bob)!.moves.push(m);
   for (const I of info.values()) I.moves.sort((a, c) => (evYear(a) ?? 0) - (evYear(c) ?? 0) || rank(a.reveal) - rank(c.reveal));
-  inferHeadingMoves(model, index, info);
+  inferHeadingMoves(model, index, finished, info);
   for (const f of fates) info.get(f.bob)!.fates.push(f);
 
   let maxYear = latest ?? Number.NEGATIVE_INFINITY;
@@ -254,7 +275,7 @@ export function computeView(model: Model, progress: Progress): ProgressView {
   assignColours(model, Pheading, info, vis);
   assignMonograms(bobs.map((b) => b.id), info);
 
-  const chapter = chapterContext(model, ref, latest, info);
+  const chapter = chapterContext(model, ref, latest, info, P >= Pheading, otherIds);
   const at = (r: Reveal) => rank(r) === P;
   const nb = bobs.filter((b) => at(b.reveal)).map((b) => b.id);
   const nm = moves.filter((m) => at(m.reveal));
@@ -262,13 +283,19 @@ export function computeView(model: Model, progress: Progress): ProgressView {
   const ns = scut.filter((s) => at(s.reveal));
   const nml = milestones.filter((m) => at(m.reveal));
 
-  return {
+  const out: ProgressView = {
     model, progress: finished ? { book: ref.book.id, chapter: ref.chapter.n, finished } : { book: ref.book.id, chapter: ref.chapter.n }, index, P, finished, latest,
     minYear: Number.isFinite(minYear) ? minYear : latest ?? 0,
     maxYear: Number.isFinite(maxYear) ? maxYear : latest ?? 0,
     ids: bobs.map((b) => b.id), info, moves, fates, scut, milestones, others, otherMoves, otherFates, chapter,
     newHere: { bobs: nb, moves: nm, fates: nf, scut: ns, milestones: nml, total: nb.length + nm.length + nf.length + ns.length + nml.length },
   };
+  // Where people call in from is named only if the reader has already met that place.
+  const known = knownPlaces(out);
+  const met = (p: string | null) => (p && known.has(p) ? p : null);
+  out.chapter.cast = chapter.cast.map((c) => ({ ...c, from: met(c.from) }));
+  if (chapter.remote) out.chapter.remote = { ...chapter.remote, from: met(chapter.remote.from) };
+  return out;
 }
 
 /**
@@ -325,7 +352,7 @@ function assignMonograms(ids: string[], info: Map<string, BobInfo>) {
  * A system heading that isn't his destination is left alone, since Bobs often narrate distant events over SCUT.
  * Inferred moves go into each Bob's own moves only, never into the Log.
  */
-function inferHeadingMoves(model: Model, index: number, info: Map<string, BobInfo>) {
+function inferHeadingMoves(model: Model, index: number, finished: boolean, info: Map<string, BobInfo>) {
   const partial = { model, info };
   const yearOf = (m: MoveRecord) => m.year ?? revealYear(model, m.reveal) ?? 0;
   const add = (m: MoveRecord) => {
@@ -334,9 +361,18 @@ function inferHeadingMoves(model: Model, index: number, info: Map<string, BobInf
     I.moves.sort((a, c) => yearOf(a) - yearOf(c));
   };
   for (const ref of model.chapters.slice(0, index + 1)) {
+    // The chapter about to be read counts by its heading alone.
+    const read = ref.index < index || finished;
     const t = ref.chapter.year;
     const nar = narratorOf(model, ref.chapter);
-    const where = headingSetting(model, ref.chapter.place);
+    const heading = chapterSetting(model, ref.chapter, read);
+    // He called in from somewhere else (a chapter already read): that is where he was, if the records have him on his
+    // way there.
+    const from = read ? ref.chapter.narratorFrom : undefined;
+    // He called in from between the stars or from somewhere the data doesn't name: nothing to infer.
+    if (read && from === null && ref.chapter.narratorVia) continue;
+    const remote = typeof from === 'string' && from && from !== heading?.system;
+    const where = remote ? { kind: 'system' as const, system: from } : heading;
     if (typeof t !== 'number' || !nar || !info.has(nar) || !where) continue;
     const s = locAt(partial, nar, t);
     if (!s || s.notYet || s.status !== 'active') continue;
@@ -346,7 +382,7 @@ function inferHeadingMoves(model: Model, index: number, info: Map<string, BobInf
       if (!s.transit) add({ ...base, bob: nar, kind: 'depart', from: s.loc, to: where.system });
       continue;
     }
-    if (!s.transit || (s.transit.to && s.transit.to !== where.system)) continue;
+    if (!s.transit || (s.transit.to ? s.transit.to !== where.system : remote)) continue;
     const dep = travelLeg(partial, nar, t);
     for (const id of dep ? companions(partial, nar, t, dep) : []) add({ ...base, bob: id, kind: 'arrive', from: dep!.from ?? null, to: where.system });
     add({ ...base, bob: nar, kind: 'arrive', from: dep?.from ?? null, to: where.system });
@@ -414,6 +450,8 @@ function chapterContext(
   ref: ChapterRef,
   latest: number | null,
   info: Map<string, BobInfo>,
+  read: boolean,
+  others: Set<string>,
 ): ChapterContext {
   const narratorId = narratorOf(model, ref.chapter);
   const narrator = narratorId && info.has(narratorId) ? narratorId : null;
@@ -423,7 +461,7 @@ function chapterContext(
   const nl = narrator && time != null ? locAt(partial, narrator, time) : null;
   let setting: ChapterContext['setting'] = null;
   let system: string | null = null;
-  const heading = headingSetting(model, ref.chapter.place);
+  const heading = chapterSetting(model, ref.chapter, read);
   if (heading) {
     setting = heading.kind;
     system = heading.system;
@@ -450,5 +488,63 @@ function chapterContext(
   }
   const leg = narrator && time != null && nl && !nl.notYet && nl.transit ? travelLeg(partial, narrator, time) : null;
   const travelling = leg && narrator && time != null ? companions(partial, narrator, time, leg) : [];
-  return { ref, narrator, time, flashbackYear, setting, system, here, lostHere, travelling };
+  // Calling in: the chapter's data says he takes part from somewhere else (narratorFrom, null when it doesn't say
+  // where, or narratorVia). Without that data: his records have him in another system on the chapter date.
+  let remote: ChapterContext['remote'] = null;
+  if (setting === 'system' && system) {
+    const named = ref.chapter.narratorFrom;
+    const via = ref.chapter.narratorVia ?? null;
+    if (named !== undefined || via) {
+      const from = typeof named === 'string' && named && !samePlace(model, named, system) ? named : null;
+      if (from || via) remote = { from, via };
+    } else {
+      const at = nl && !nl.notYet && !nl.transit && nl.status === 'active' ? nl.loc : null;
+      if (at && !samePlace(model, at, system)) remote = { from: at, via: null };
+    }
+  }
+  return { ref, narrator, time, flashbackYear, setting, system, here, lostHere, travelling, remote, cast: chapterCast(model, ref, narrator ?? narratorId, system, info, others, (id) => {
+    // Only Bobs the reader's records have active on the chapter date (a lost Bob is not shown taking part).
+    const s = time != null ? locAt(partial, id, time) : null;
+    return !!s && !s.notYet && s.status === 'active';
+  }) };
+}
+
+/** The chapter's cast, other than its narrator: people the reader has met, each there or calling in. */
+function chapterCast(model: Model, ref: ChapterRef, narrator: string | null, system: string | null, bobs: Map<string, BobInfo>, others: Set<string>, active: (id: string) => boolean): CastMember[] {
+  const out: CastMember[] = [];
+  for (const c of (ref.chapter.cast ?? []) as CastRecord[]) {
+    if (!c?.id || c.id === narrator || out.some((o) => o.id === c.id)) continue;
+    const isOther = !bobs.has(c.id);
+    if (isOther && !others.has(c.id)) continue;
+    if (!isOther && !active(c.id)) continue;
+    const via = c.via ?? null;
+    const from = c.from ?? null;
+    const there = !!from && samePlace(model, from, system);
+    const remote = via !== 'present' && (via !== null || (!!from && !!system && !there));
+    out.push({ id: c.id, isOther, from: remote && !there ? from : null, via, remote });
+  }
+  return out;
+}
+
+/** Places the reader has met: named by a revealed record or a read chapter heading (the current chapter's heading
+ * included). Everything else on the map is an unlabelled background star. */
+export function knownPlaces(view: ProgressView): Set<string> {
+  const out = new Set<string>();
+  const add = (p: string | null | undefined) => {
+    if (p) out.add(p);
+  };
+  for (const id of view.ids) add(view.info.get(id)!.bob.where);
+  for (const m of [...view.moves, ...view.otherMoves]) {
+    add(m.from);
+    add(m.to);
+  }
+  for (const ref of view.model.chapters.slice(0, view.index + 1)) {
+    const h = chapterSetting(view.model, ref.chapter, rank({ book: ref.book.id, chapter: ref.chapter.n }) <= view.P);
+    add(h?.system ?? systemIn(view.model, ref.chapter.place));
+  }
+  add(view.chapter.system);
+  // Colonies, outposts and territory, once revealed (with their group).
+  const groupSeen = new Set((view.model.data.groups ?? []).filter((g) => rank(g.reveal) <= view.P).map((g) => g.id));
+  for (const pr of view.model.data.presence ?? []) if (groupSeen.has(pr.group) && rank(pr.reveal) <= view.P) add(pr.system);
+  return out;
 }

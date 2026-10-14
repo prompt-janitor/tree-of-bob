@@ -2,14 +2,15 @@
 // recording one Skia picture; React does not re-render while the map turns, tilts or zooms. Order: the galaxy disc
 // (galaxy level), the floor (the infinite horizontal plane through the camera centre: a darker shade inside the
 // viewport globe, a lighter one outside, distance rings), the viewport globe (fixed on the screen, turning with the
-// camera), drop lines and feet,
-// travel history, then what is in the air (SCUT, ghosts, voyages, hops), places, the narrator's puck, the scale bar,
+// camera), the SCUT network's shade, drop lines and feet,
+// travel history, then what is in the air (SCUT, calling in, ghosts, voyages, hops), places, the narrator's puck, the scale bar,
 // labels, and edge markers for occupied places off screen.
 import { BlendMode, FillType, FilterMode, MipmapMode, PaintStyle, PointMode, Skia, StrokeCap, TileMode, VertexMode, type SkCanvas, type SkImage, type SkFont, type SkPaint, type SkPathEffect } from '@shopify/react-native-skia';
 
 import type { Camera, Vec3 } from '@/core';
 
-import { COMPASS_R, compassAt, DIM, GALACTIC_CENTRE, PIP_GAP, lyLabel, pipOffset, scaleBarFor, viewportDiameter, type Font, type LabelLine, type Scene, type SceneNode } from './scene';
+import { flashGlow, GLINT_GAP, GLINT_LEN, HOP_DELAY, RIPPLES_PER_CYCLE } from './motion';
+import { COMPASS_R, compassAt, convexHull2d, DIM, GALACTIC_CENTRE, PIP_GAP, lyLabel, pipOffset, roundedHull, scaleBarFor, viewportDiameter, type Font, type LabelLine, type Scene, type SceneNode } from './scene';
 
 /** Radius of the viewport globe as a fraction of the free map area's shorter side. */
 export const GLOBE_K = 0.45;
@@ -46,6 +47,8 @@ export interface DrawOptions {
   /** Gaia's all-sky map (greyscale, galactic longitude +180 to -180 left to right, latitude +40 to -40 top to bottom),
    * once loaded. */
   milkyWay?: SkImage | null;
+  /** SCUT layer shown: the line under the scale bar, longest first (the first that fits is drawn). */
+  scutText?: string[] | null;
   /** Filled in for hit testing (taps run the drawing once into a throwaway picture): every pip and every name in a
    * label as drawn, so a tap opens exactly what is on the screen. */
   hits?: DrawHit[];
@@ -622,6 +625,118 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
     }
   }
 
+  // 1b. The SCUT network (layer shown, nothing selected): a soft shade round every system on it, the outline of its
+  // convex hull as seen, padded clear of the markers. Depth without turning: the shade deepens towards the viewer
+  // (the side nearest is darkest), and the outline is solid on the near side and dashed on the far side, as the
+  // globe's rings are. In a flashback, the network at NOW as a faint double outline.
+  const outline = (flat: number[], pad: number) => roundedHull(convexHull2d(flat), pad);
+  const pathOf = (o: number[]) => {
+    const b = Skia.PathBuilder.Make();
+    b.moveTo(o[0], o[1]);
+    for (let i = 2; i < o.length; i += 2) b.lineTo(o[i], o[i + 1]);
+    b.close();
+    return b.build();
+  };
+  if (scene.scutHull.length) {
+    const flat: number[] = [];
+    const deep: number[] = [];
+    for (const v of scene.scutHull) {
+      const q = P(v);
+      flat.push(q.x, q.y);
+      deep.push(q.depth);
+    }
+    // Padded clear of the markers, or out to SCUT's range round each point once the reader knows it.
+    const pad = Math.max(16, (scene.scutPad ?? 0) * cam.scale);
+    const o = outline(flat, pad);
+    if (o.length >= 6) {
+      // Depth across the screen: least-squares plane depth = gx * x + gy * y + c through the members.
+      const n = deep.length;
+      let mx = 0;
+      let my = 0;
+      let md = 0;
+      for (let i = 0; i < n; i++) {
+        mx += flat[i * 2] / n;
+        my += flat[i * 2 + 1] / n;
+        md += deep[i] / n;
+      }
+      let sxx = 0;
+      let sxy = 0;
+      let syy = 0;
+      let sxd = 0;
+      let syd = 0;
+      for (let i = 0; i < n; i++) {
+        const dx = flat[i * 2] - mx;
+        const dy = flat[i * 2 + 1] - my;
+        const dd = deep[i] - md;
+        sxx += dx * dx;
+        sxy += dx * dy;
+        syy += dy * dy;
+        sxd += dx * dd;
+        syd += dy * dd;
+      }
+      const det = sxx * syy - sxy * sxy;
+      let gx = 0;
+      let gy = 0;
+      if (Math.abs(det) > 1e-6) {
+        gx = (sxd * syy - syd * sxy) / det;
+        gy = (syd * sxx - sxd * sxy) / det;
+      } else if (sxx + syy > 1e-6) {
+        // On a line on the screen: depth along it.
+        gx = sxd / (sxx + syy);
+        gy = syd / (sxx + syy);
+      }
+      const depthAt = (x: number, y: number) => gx * (x - mx) + gy * (y - my);
+      // The gradient runs across the outline from its farthest point to its nearest.
+      let lo = Infinity;
+      let hi = -Infinity;
+      let lx = mx;
+      let ly = my;
+      let hx = mx;
+      let hy = my;
+      for (let i = 0; i < o.length; i += 2) {
+        const d = depthAt(o[i], o[i + 1]);
+        if (d < lo) [lo, lx, ly] = [d, o[i], o[i + 1]];
+        if (d > hi) [hi, hx, hy] = [d, o[i], o[i + 1]];
+      }
+      const hp = pathOf(o);
+      const flatDepth = hi - lo < 1e-6;
+      if (flatDepth) canvas.drawPath(hp, paint(T.ink, T.dark ? 0.08 : 0.06));
+      else {
+        const gp = Skia.Paint();
+        gp.setAntiAlias(true);
+        const ink = Skia.Color(T.ink);
+        const at = (a: number) => Skia.Color(`rgba(${Math.round(ink[0] * 255)}, ${Math.round(ink[1] * 255)}, ${Math.round(ink[2] * 255)}, ${a})`);
+        gp.setShader(Skia.Shader.MakeLinearGradient({ x: lx, y: ly }, { x: hx, y: hy }, [at(T.dark ? 0.02 : 0.015), at(T.dark ? 0.16 : 0.12)], null, TileMode.Clamp));
+        canvas.drawPath(hp, gp);
+      }
+      // The outline in runs: solid where it is nearer than the middle, dashed where farther.
+      const mid = (lo + hi) / 2;
+      const near = paint(T.ink, T.dark ? 0.55 : 0.45, 1.25);
+      const far = paint(T.ink, T.dark ? 0.28 : 0.22, 1, [3, 4]);
+      const m = o.length / 2;
+      for (let k = 0; k < m; k++) {
+        const x0 = o[k * 2];
+        const y0 = o[k * 2 + 1];
+        const x1 = o[((k + 1) % m) * 2];
+        const y1 = o[((k + 1) % m) * 2 + 1];
+        const isNear = flatDepth || depthAt((x0 + x1) / 2, (y0 + y1) / 2) >= mid;
+        canvas.drawLine(x0, y0, x1, y1, isNear ? near : far);
+      }
+    }
+  }
+  if (scene.scutNowHull.length) {
+    const flat: number[] = [];
+    for (const v of scene.scutNowHull) {
+      const q = P(v);
+      flat.push(q.x, q.y);
+    }
+    const pad0 = Math.max(16, (scene.scutPad ?? 0) * cam.scale);
+    for (const pad of [pad0, pad0 + 3]) {
+      const o = outline(flat, pad);
+      if (o.length >= 6) canvas.drawPath(pathOf(o), paint(T.ink, T.dark ? 0.32 : 0.28, 0.75));
+    }
+  }
+
   // 2. Background stars: small ink dots with thin drop lines to a flat dot on the floor.
   const dropPaint = paint(T.ink, (T.dark ? 0.14 : 0.11) * dropTilt, 0.75);
   const starPaint = paint(T.ink, T.dark ? 0.55 : 0.45);
@@ -705,22 +820,19 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
     }
   }
 
-  // 5. SCUT links: thin ink lines in the air with a short cross tick near each end, so without colour they still differ
-  // from a faint solid history line (ticks only on links long enough to carry them).
-  const scutPaint = paint(T.ink, 0.3, 0.75);
+  // 5. SCUT links, the network's trunk lines: a soft ink band with a crisp core, like a cable (no colour: it is
+  // structure, not a person). On the motion layer each flashes along its whole length now and then (instantaneous).
+  // Background information, not the chapter's story: kept dim.
+  const sheath = paint(T.ink, T.dark ? 0.06 : 0.05, 5);
+  const core = paint(T.ink, T.dark ? 0.32 : 0.28, 1);
   for (const [a, b] of scene.scut) {
     const pa = P(a);
     const pb = P(b);
-    canvas.drawLine(pa.x, pa.y, pb.x, pb.y, scutPaint);
-    const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
-    if (len < 40) continue;
-    const ux = (pb.x - pa.x) / len;
-    const uy = (pb.y - pa.y) / len;
-    for (const [x, y] of [
-      [pa.x + ux * 12, pa.y + uy * 12],
-      [pb.x - ux * 12, pb.y - uy * 12],
-    ]) canvas.drawLine(x - uy * 3.5, y + ux * 3.5, x + uy * 3.5, y - ux * 3.5, scutPaint);
+    canvas.drawLine(pa.x, pa.y, pb.x, pb.y, sheath);
+    canvas.drawLine(pa.x, pa.y, pb.x, pb.y, core);
   }
+
+  // 5b. Calling in: drawn on the motion layer (drawMotion), so the ripples can move.
 
   // 6. Ghost trails (flashbacks): a faint double hairline (a solid line with chevrons means a voyage, a faint solid
   // one travel history), ending in a hollow ring.
@@ -827,6 +939,14 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
     }
   }
 
+  // 7b. Where a caller on his way probably is (no revealed arrival): a hollow dashed ring on his line, as a best guess
+  // is drawn.
+  for (const e of scene.estimates) {
+    const q = P(e);
+    canvas.drawCircle(q.x, q.y, 5.5, paint(T.bg, 1));
+    canvas.drawCircle(q.x, q.y, 4.25, paint(T.ink, 0.9, 1.5, [2, 2]));
+  }
+
   // 8. Wormhole hops: a thin solid arc rising above the plane, with a flat gate on the floor at each end.
   // Transmitted: dotted ink, no gates.
   const gateRx = 11;
@@ -911,6 +1031,11 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
       canvas.drawCircle(a.x, a.y, 9, paint(T.bg, 1));
       canvas.drawCircle(a.x, a.y, 9, paint(null, alpha, 1.25));
       canvas.drawCircle(a.x, a.y, 3.5, paint(null, alpha));
+    } else if (node.guess && !node.puck) {
+      // A best-guess position: a hollow dashed ring, the same size as the dot it stands for.
+      const r = (node.empty ? 3 : 4.25) * cue.size;
+      canvas.drawCircle(a.x, a.y, r + 1.25, paint(T.bg, 1));
+      canvas.drawCircle(a.x, a.y, r, paint(null, alpha * (node.empty ? 0.7 : 1) * cue.alpha, 1.5, [2, 2]));
     } else if (node.empty) {
       canvas.drawCircle(a.x, a.y, 4 * cue.size, paint(T.bg, 1));
       canvas.drawCircle(a.x, a.y, 3 * cue.size, paint(null, alpha * 0.7 * cue.alpha, 1.25));
@@ -918,7 +1043,7 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
       canvas.drawCircle(a.x, a.y, 5.5 * cue.size, paint(T.bg, 1));
       canvas.drawCircle(a.x, a.y, 4.25 * cue.size, paint(null, alpha * cue.alpha));
     }
-    if (node.chapterRing) canvas.drawCircle(a.x, a.y, 10, paint(null, 1, 1.5));
+    if (node.chapterRing) canvas.drawCircle(a.x, a.y, 10, paint(null, alpha, 1.5));
     // Home systems, colonies, outposts and territory, in ink and told apart by shape: a home system is a double ring
     // round the marker, a colony a ring, an outpost a small square, territory a wide dashed ring.
     for (const k of node.presence) {
@@ -1001,6 +1126,16 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
           const s = (opt.viewportPrefix ?? 'Viewport diameter ') + dia;
           text(s, x, y + 16, fonts.small, T.ink3, 1);
           placed.push(x - 2, y + 6, fonts.small.getTextWidth(s) + 4, 13);
+        }
+        // The SCUT network in numbers, under that: the longest form that fits beside the controls.
+        if (opt.scutText?.length) {
+          let room = opt.box.r - x - 8;
+          for (const c of opt.chrome) if (c.t < y + 34 && c.b > y + 20 && c.l > x) room = Math.min(room, c.l - x - 8);
+          const s = opt.scutText.find((v) => fonts.small.getTextWidth(v) <= room);
+          if (s) {
+            text(s, x, y + 30, fonts.small, T.ink2, 1);
+            placed.push(x - 2, y + 20, fonts.small.getTextWidth(s) + 4, 13);
+          }
         }
       }
     }
@@ -1259,6 +1394,117 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
         break;
       }
       if (done) break;
+    }
+  }
+}
+
+export { MOTION_CYCLES, MOTION_MS } from './motion';
+
+/** The motion layer, over the map: what moves while the map is still. `phase` grows by 1 every MOTION_MS (held at 0
+ * with Reduce Motion or off screen). Calling in: a train of short arcs from the caller's place to where the chapter is
+ * set, each curving away from the caller like a ripple and widening a little as it goes, drifting towards the chapter
+ * (no line, no arrowhead: an arrow means travel). The narrator's larger and in his colour, the rest of the cast's
+ * smaller and fainter; other replicants ink. SCUT links: a brief flash along each whole line (they are instant).
+ * Voyages: a faint glint drifting along each line towards the destination. Each fades in and out at the ends. */
+export function drawMotion(canvas: SkCanvas, scene: Scene, cam: Camera, phase: number, moving: boolean) {
+  'worklet';
+  const T = scene.theme;
+  const P = (v: Vec3) => proj(v.x, v.y, v.z, cam);
+  const stroke = (colour: string | null, alpha: number, width: number) => {
+    const p = Skia.Paint();
+    p.setAntiAlias(true);
+    p.setColor(Skia.Color(colour ?? T.ink));
+    p.setAlphaf(Math.max(0, Math.min(1, alpha)));
+    p.setStyle(PaintStyle.Stroke);
+    p.setStrokeWidth(width);
+    p.setStrokeCap(StrokeCap.Round);
+    return p;
+  };
+  const ends = (t: number) => Math.max(0, Math.min(1, t * 5, (1 - t) * 5));
+
+  // Calling in. Each end stops short of what is drawn there: the narrator's puck, a chapter ring, or a plain marker.
+  const pk = puckAt(scene, cam);
+  const rings: number[] = [];
+  for (const n of scene.nodes) {
+    if (!n.chapterRing) continue;
+    const q = P(n.p);
+    rings.push(q.x, q.y);
+  }
+  const inset = (x: number, y: number) => {
+    if (pk && Math.hypot(pk.x - x, pk.y - y) < 1) return 18;
+    for (let i = 0; i < rings.length; i += 2) if (Math.hypot(rings[i] - x, rings[i + 1] - y) < 1) return 13;
+    return 8;
+  };
+  for (const c of scene.calls) {
+    const pa = P(c.a);
+    const pb = P(c.b);
+    const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    const r0 = inset(pa.x, pa.y);
+    const r1 = inset(pb.x, pb.y);
+    const run = len - r0 - r1;
+    if (run < 12) continue;
+    const ux = (pb.x - pa.x) / len;
+    const uy = (pb.y - pa.y) / len;
+    const dir = (Math.atan2(uy, ux) * 180) / Math.PI;
+    const gap = c.pov ? 9 : 10;
+    const rMin = c.pov ? 3.5 : 2.5;
+    const rMax = c.pov ? 7 : 5;
+    const half = c.pov ? 42 : 38;
+    const alpha = c.dim ? DIM : c.pov ? 0.95 : 0.6;
+    const n = Math.max(1, Math.floor(run / gap));
+    // A ripple moves one gap every 1/RIPPLES_PER_CYCLE of the cycle.
+    const shift = (phase * RIPPLES_PER_CYCLE) % 1;
+    for (let k = 0; k <= n; k++) {
+      const t = Math.min(1, (k + shift) / n);
+      const d = r0 + 2 + t * (run - 4);
+      const r = rMin + (rMax - rMin) * t;
+      const cx = pa.x + ux * (d - r);
+      const cy = pa.y + uy * (d - r);
+      const wave = Skia.PathBuilder.Make();
+      wave.addArc(Skia.XYWHRect(cx - r, cy - r, r * 2, r * 2), dir - half, half * 2);
+      canvas.drawPath(wave.build(), stroke(c.colour, alpha * ends(t), c.pov ? 1.5 : 1.25));
+    }
+  }
+
+  // SCUT trunk lines are instantaneous (FTL): nothing travels along them. Once a cycle a pulse spreads through the
+  // network hop by hop from a system picked at random each cycle: each link brightens along its whole length at
+  // once, faintly, then fades.
+  if (moving && scene.scutRoots > 0) {
+    const cycle = Math.floor(phase);
+    const root = Math.floor((Math.abs(Math.sin(cycle * 12.9898 + 4.1414) * 43758.5453) % 1) * scene.scutRoots);
+    const frac = phase - cycle;
+    for (let i = 0; i < scene.scut.length; i++) {
+      const [a, b] = scene.scut[i];
+      const k = (((frac - (scene.scutHops[root * scene.scut.length + i] ?? 0) * HOP_DELAY) % 1) + 1) % 1;
+      const glow = flashGlow(k);
+      if (glow < 0.02) continue;
+      const pa = P(a);
+      const pb = P(b);
+      canvas.drawLine(pa.x, pa.y, pb.x, pb.y, stroke(T.ink, (T.dark ? 0.1 : 0.08) * glow, 6));
+      canvas.drawLine(pa.x, pa.y, pb.x, pb.y, stroke(T.ink, (T.dark ? 0.38 : 0.32) * glow, 1.25));
+    }
+  }
+
+  // Voyages: a glint every GLINT_GAP pt, drifting from the origin towards the destination.
+  if (moving) {
+    for (const v of scene.voyages) {
+      if (!v.b || v.dim) continue;
+      const pa = P(v.a);
+      const pb = P(v.b);
+      const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+      if (len < 40) continue;
+      const ux = (pb.x - pa.x) / len;
+      const uy = (pb.y - pa.y) / len;
+      const w = (v.strong ? 2.5 : 1.75) + 0.5;
+      for (let d = (phase * GLINT_GAP) % GLINT_GAP; d < len; d += GLINT_GAP) {
+        const t = d / len;
+        const a = (T.dark ? 0.55 : 0.45) * ends(t);
+        if (a < 0.02) continue;
+        const x0 = pa.x + ux * d;
+        const y0 = pa.y + uy * d;
+        const l = Math.min(GLINT_LEN, len - d);
+        canvas.drawLine(x0, y0, x0 + ux * l, y0 + uy * l, stroke(T.ink, a, w));
+      }
     }
   }
 }

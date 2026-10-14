@@ -33,7 +33,7 @@ interface Credit {
 const CREDITS: Credit[] = [
   { text: 'Story data adapted from the Bobiverse Wiki (CC BY-SA 3.0).', links: [{ label: 'Bobiverse Wiki', url: 'https://bobiverse.fandom.com' }, { label: 'CC BY-SA 3.0', url: BY_SA_3 }] },
   { text: "This app's data file: CC BY-SA 4.0.", links: [{ label: 'Data file', url: `${REPO}/blob/main/src/data/tree-of-bob.json` }, { label: 'CC BY-SA 4.0', url: BY_SA_4 }] },
-  { text: 'Star positions and sky: HYG Database v4.1 and v4.2, CC BY-SA 4.0. Some far positions: SIMBAD, Wikipedia.', links: [{ label: 'HYG Database', url: 'https://codeberg.org/astronexus/hyg' }] },
+  { text: 'Star positions and sky: HYG Database v4.1, v4.2 and v4.4, CC BY-SA 4.0. Some far positions: SIMBAD, Wikipedia.', links: [{ label: 'HYG Database', url: 'https://codeberg.org/astronexus/hyg' }] },
   { text: 'Milky Way: ESA/Gaia/DPAC, CC BY-SA 3.0 IGO (acknowledgement A. Moitinho). Cropped and converted to greyscale.', links: [{ label: 'Gaia sky map', url: 'https://sci.esa.int/web/gaia/-/the-colour-of-the-sky-from-gaia-s-early-data-release-3-equirectangular-projection' }, { label: 'CC BY-SA 3.0 IGO', url: 'https://creativecommons.org/licenses/by-sa/3.0/igo/' }] },
   { text: 'Some lineage cross-checked against bobiverse-map by thunfischtoast, CC BY-SA 4.0.', links: [{ label: 'bobiverse-map', url: 'https://github.com/thunfischtoast/bobiverse-map' }] },
   { text: 'App code © 2026 prompt-janitor, MIT licence.', links: [{ label: 'Source code', url: REPO }] },

@@ -1,8 +1,8 @@
 // The Systems map: where everyone is on a given story date, built only from a ProgressView (so nothing past the
 // reveal gate or NOW can appear), plus the geometry to draw it.
-import { headingSetting, rank, revealYear, systemIn, type Model } from './model';
-import type { MoveRecord, PresenceRecord, Reveal, SystemRecord, Via } from './types';
-import { fateStatus, locAt, type ProgressView } from './view';
+import { rank, revealYear, type Model } from './model';
+import type { MoveRecord, PresenceRecord, RemoteVia, Reveal, ScutRange, SystemRecord, Via } from './types';
+import { fateStatus, knownPlaces, locAt, type ProgressView } from './view';
 
 export interface Vec3 {
   x: number;
@@ -42,6 +42,28 @@ export function lerp3(a: Vec3, b: Vec3, f: number): Vec3 {
 /** A "near" place this close to its anchor is drawn on it; further out, its direction is unknown, so it is unplaced. */
 export const NEAR_SAME_POINT_LY = 10;
 
+/** A best-guess position: the catalogue star chosen (null: a point in a region) and the 95% range of its distance
+ * from Sol. */
+export interface PlaceGuess {
+  candidate: string | null;
+  rangeLy: [number, number] | null;
+}
+
+/** Whether a place's position is a best guess: its own, or that of the place it sits on (near, within
+ * NEAR_SAME_POINT_LY). The guess's free text is left out: it may cite later chapters. */
+export function placeGuess(model: Model, id: string): PlaceGuess | null {
+  const recs = model.data.systems ?? [];
+  let at: string | null = id;
+  for (let i = 0; i < 8 && at; i++) {
+    const s = recs.find((x) => x.id === at);
+    if (!s) return null;
+    if (s.guess) return { candidate: s.guess.candidate ?? null, rangeLy: s.guess.distSolLy95 ?? null };
+    if (s.pos || s.kind !== 'near' || (s.offsetLy ?? 0) > NEAR_SAME_POINT_LY) return null;
+    at = s.near ?? null;
+  }
+  return null;
+}
+
 /** Galactic-frame positions (parsecs) for every place that has one. A "near" place within NEAR_SAME_POINT_LY of its
  * anchor sits on it (a few light years from a galactic-scale object is the same point). Static: no progress involved. */
 export function placePositions(model: Model): Map<string, Vec3> {
@@ -79,28 +101,6 @@ export function backgroundStars(view: ProgressView, state: Pick<MapState, 'place
   return out;
 }
 
-/** Places the reader has met: named by a revealed record or a read chapter heading (the current chapter's heading
- * included). Everything else on the map is an unlabelled background star. */
-export function knownPlaces(view: ProgressView): Set<string> {
-  const out = new Set<string>();
-  const add = (p: string | null | undefined) => {
-    if (p) out.add(p);
-  };
-  for (const id of view.ids) add(view.info.get(id)!.bob.where);
-  for (const m of [...view.moves, ...view.otherMoves]) {
-    add(m.from);
-    add(m.to);
-  }
-  for (const ref of view.model.chapters.slice(0, view.index + 1)) {
-    const h = headingSetting(view.model, ref.chapter.place);
-    add(h?.system ?? systemIn(view.model, ref.chapter.place));
-  }
-  add(view.chapter.system);
-  // Colonies, outposts and territory, once revealed (with their group).
-  const groupSeen = new Set((view.model.data.groups ?? []).filter((g) => rank(g.reveal) <= view.P).map((g) => g.id));
-  for (const pr of view.model.data.presence ?? []) if (groupSeen.has(pr.group) && rank(pr.reveal) <= view.P) add(pr.system);
-  return out;
-}
 
 export interface MapPlace {
   id: string;
@@ -114,6 +114,8 @@ export interface MapPlace {
   narrator: boolean;
   /** Someone here is on SCUT by this date. */
   scut: boolean;
+  /** The books do not place it: its position is a best guess. */
+  guess: PlaceGuess | null;
   /** Colonies, outposts and held territory here on this date, as far as the reader knows. */
   presence: MapPresence[];
 }
@@ -146,6 +148,11 @@ export interface MapVoyage {
   /** Elapsed fraction of the journey on the map date; null when the arrival or the destination is not revealed (no
    * dot is drawn). */
   fraction: number | null;
+  /** When fraction is null: an estimate from the usual speed of the journeys revealed so far (null: no basis). Used
+   * only for where a caller on his way calls in from, marked as an estimate. */
+  estimate: number | null;
+  /** On SCUT on the map date (a Bob whose SCUT is revealed). */
+  scut: boolean;
 }
 
 export interface MapHop {
@@ -170,6 +177,18 @@ export interface GhostTrail {
   year: number;
 }
 
+/** Someone taking part in a chapter from another system: a link from where he is to where the chapter is set. */
+export interface MapCall {
+  who: string;
+  isOther: boolean;
+  /** Where he is; null: on a voyage (from his position along it). */
+  from: string | null;
+  to: string;
+  /** The narrator of the current chapter; otherwise someone else in its cast. */
+  pov: boolean;
+  via: RemoteVia | null;
+}
+
 export interface MapState {
   time: number;
   /** The narrator's place on the map date, when he is at one. */
@@ -182,6 +201,8 @@ export interface MapState {
   scutLinks: [string, string][];
   /** Flashback chapters only: what the reader already knows happens between the map date and NOW. */
   ghosts: GhostTrail[];
+  /** Calling in: the narrator's link to where the chapter is set, and links for the chapter just read. */
+  calls: MapCall[];
 }
 
 const EPS = 0.01;
@@ -234,6 +255,29 @@ function arrivalAfter(view: ProgressView, moves: MoveRecord[], departed: number)
     if (m.kind === 'depart' && y > departed + EPS) return null;
   }
   return null;
+}
+
+/** The median speed (ly a year) of the journeys the reader has seen completed: a revealed departure and the revealed
+ * arrival after it, by voyage (not a wormhole or a transmission), between two placed systems. Null with none. */
+export function typicalSpeed(view: ProgressView, pos: Map<string, Vec3>): number | null {
+  const speeds: number[] = [];
+  for (const id of view.ids) {
+    const moves = view.info.get(id)!.moves;
+    for (let i = 0; i < moves.length; i++) {
+      const d = moves[i];
+      if (d.kind !== 'depart' || !d.from || !d.to || d.via === 'wormhole' || d.via === 'transmitted' || d.inferred) continue;
+      const y0 = yearOf(view.model, d);
+      const arr = moves.slice(i + 1).find((m) => m.kind === 'arrive' && m.to === d.to);
+      const y1 = arr ? yearOf(view.model, arr) : null;
+      const a = pos.get(d.from);
+      const b = pos.get(d.to);
+      if (y0 == null || y1 == null || y1 - y0 < 0.5 || !a || !b) continue;
+      speeds.push(distanceLy(a, b) / (y1 - y0));
+    }
+  }
+  if (!speeds.length) return null;
+  speeds.sort((x, y) => x - y);
+  return speeds[Math.floor(speeds.length / 2)];
 }
 
 function fractionOf(t: number, departed: number, arrives: number | null): number | null {
@@ -294,7 +338,7 @@ export function mapState(view: ProgressView, t: number): MapState {
       const ps = pos.get(id) ?? null;
       p = {
         id, pos: ps, kind: recs.get(id)?.kind ?? 'unknown', local: ps ? distanceLy(ps) <= LOCAL_RADIUS_LY : true,
-        bobs: [], others: [], lost: [], narrator: false, scut: false, presence: [],
+        bobs: [], others: [], lost: [], narrator: false, scut: false, presence: [], guess: placeGuess(model, id),
       };
       places.set(id, p);
     }
@@ -324,7 +368,7 @@ export function mapState(view: ProgressView, t: number): MapState {
       const departed = dep ? yearOf(model, dep)! : I.born;
       const arr = arrivalAfter(view, I.moves, departed);
       const to = s.transit.to ?? arr?.to ?? null;
-      voyages.push({ who: id, isOther: false, from: s.loc, to, departed, departKnown: !!dep, departInferred: !!dep?.inferred, arrives: arr?.year ?? null, fraction: to ? fractionOf(t, departed, arr?.year ?? null) : null });
+      voyages.push({ who: id, isOther: false, from: s.loc, to, departed, departKnown: !!dep, departInferred: !!dep?.inferred, arrives: arr?.year ?? null, fraction: to ? fractionOf(t, departed, arr?.year ?? null) : null, estimate: null, scut: onScut(id) });
       continue;
     }
     if (!s.loc) continue;
@@ -344,13 +388,23 @@ export function mapState(view: ProgressView, t: number): MapState {
       const to = s.transit.to ?? arr?.to ?? null;
       voyages.push({
         who: o.id, isOther: true, from: s.transit.from, to, departed: s.transit.departed, departKnown: true, departInferred: false, arrives: arr?.year ?? null,
-        fraction: to ? fractionOf(t, s.transit.departed, arr?.year ?? null) : null,
+        fraction: to ? fractionOf(t, s.transit.departed, arr?.year ?? null) : null, estimate: null, scut: false,
       });
     } else if (s.loc) {
       placeOf(s.loc).others.push(o.id);
       const hop = lastHop(view, movesOf(view, o.id, true), t);
       if (hop) hops.push({ who: o.id, isOther: true, from: hop.m.from ?? hopOrigin(view, o.id, true, hop.y), to: hop.m.to!, year: hop.y, via: hop.m.via as MapHop['via'] });
     }
+  }
+
+  // Where a traveller with no revealed arrival probably is: elapsed time at the usual speed of revealed journeys.
+  const speed = typicalSpeed(view, pos);
+  for (const v of voyages) {
+    if (v.fraction != null || !v.to || !v.from || !v.departKnown || speed == null) continue;
+    const a = pos.get(v.from);
+    const b = pos.get(v.to);
+    const d = a && b ? distanceLy(a, b) : 0;
+    if (d > 0.1) v.estimate = Math.min(0.97, Math.max(0.03, ((t - v.departed) * speed) / d));
   }
 
   // Colonies, outposts and territory: revealed (with their group), begun by the map date and not known to have ended.
@@ -371,7 +425,35 @@ export function mapState(view: ProgressView, t: number): MapState {
   const scutLinks = minimumSpanningTree(list.filter((p) => p.scut).map((p) => p.id), pos);
   const focus = list.find((p) => p.narrator)?.id ?? null;
   const flashback = view.chapter.flashbackYear != null && Math.abs(t - (view.chapter.time ?? t)) < EPS;
-  return { time: t, focus, places: list, voyages, hops, scutLinks, ghosts: flashback ? ghostTrails(view, t) : [] };
+  return { time: t, focus, places: list, voyages, hops, scutLinks, ghosts: flashback ? ghostTrails(view, t) : [], calls: mapCalls(view, t, places, voyages) };
+}
+
+/** Calling-in links on the map date: each from a place where the caller is drawn to a known place. */
+function mapCalls(view: ProgressView, t: number, places: Map<string, MapPlace>, voyages: MapVoyage[]): MapCall[] {
+  const out: MapCall[] = [];
+  const atPlace = (id: string, place: string, isOther: boolean) => {
+    const pl = places.get(place);
+    return !!pl && (isOther ? pl.others : pl.bobs).includes(id);
+  };
+  // Travelling with a known position on the map date: the call comes from where he is drawn on his way (from: null).
+  const onVoyage = (id: string) => voyages.some((v) => v.who === id && (v.fraction ?? v.estimate) != null);
+  const fromOf = (id: string, place: string | null, isOther: boolean): string | null | undefined =>
+    place && atPlace(id, place, isOther) ? place : onVoyage(id) ? null : undefined;
+  const to = view.chapter.setting === 'system' ? view.chapter.system : null;
+  if (!to || !places.has(to)) return out;
+  const r = view.chapter.remote;
+  const narrator = view.chapter.narrator;
+  if (r && narrator) {
+    const from = fromOf(narrator, r.from, false);
+    if (from !== undefined) out.push({ who: narrator, isOther: false, from, to, pov: true, via: r.via });
+  }
+  // The rest of the cast who call in, from a place where the map has them or from their voyage.
+  for (const c of view.chapter.cast) {
+    if (!c.remote) continue;
+    const from = fromOf(c.id, c.from, c.isOther);
+    if (from !== undefined) out.push({ who: c.id, isOther: c.isOther, from, to, pov: false, via: c.via === 'present' ? null : c.via });
+  }
+  return out;
 }
 
 /** One colony, home system, outpost or territory as words: the world's name when the books give one, then the group
@@ -383,6 +465,9 @@ export function presenceText(pr: MapPresence): string {
 
 /** How a map layer is shown: only what the chapter is about, everything, or nothing. */
 export type LayerMode = 'chapter' | 'show' | 'hide';
+
+/** The SCUT network layer: its links, its links and volume, or nothing. */
+export type ScutMode = 'show' | 'volume' | 'hide';
 
 /** What the Systems map shows, layer by layer. */
 export interface MapLayers {
@@ -400,11 +485,13 @@ export interface MapLayers {
   empty: LayerMode;
   /** Colonies, outposts and territory. */
   presence: LayerMode;
+  /** The SCUT network: show its links (every system on it stays on the map), its volume as well, or neither. */
+  scut: ScutMode;
 }
 
-export const LAYER_KEYS = ['bobs', 'others', 'journeys', 'history', 'names', 'empty', 'presence'] as const;
+export const LAYER_KEYS = ['bobs', 'others', 'journeys', 'history', 'names', 'empty', 'presence', 'scut'] as const;
 
-export const DEFAULT_LAYERS: MapLayers = { bobs: 'chapter', others: 'chapter', journeys: 'chapter', history: 'chapter', names: 'show', empty: 'chapter', presence: 'show' };
+export const DEFAULT_LAYERS: MapLayers = { bobs: 'chapter', others: 'chapter', journeys: 'chapter', history: 'chapter', names: 'show', empty: 'chapter', presence: 'show', scut: 'show' };
 
 /** Saved layer settings, with anything unknown (an older format) replaced by the default. */
 export function readLayers(saved: unknown): MapLayers {
@@ -412,13 +499,15 @@ export function readLayers(saved: unknown): MapLayers {
   if (!saved || typeof saved !== 'object') return out;
   for (const k of LAYER_KEYS) {
     const v = (saved as Record<string, unknown>)[k];
-    if (v === 'chapter' || v === 'show' || v === 'hide') out[k] = v;
+    if (k === 'scut') {
+      if (v === 'show' || v === 'volume' || v === 'hide') out.scut = v;
+    } else if (v === 'chapter' || v === 'show' || v === 'hide') out[k] = v;
   }
   return out;
 }
 
-/** The people the chapter is about: the narrator, everyone at the place it is set on the map date, the Bobs new in the
- * chapter just read, and everyone who moved or met a fate in it. */
+/** The people the chapter is about: the narrator and the rest of its cast, everyone at the place it is set on the map
+ * date, the Bobs new in the chapter just read, and everyone who moved or met a fate in it. */
 export function chapterPeople(view: ProgressView, state: MapState): Set<string> {
   const out = new Set<string>();
   const narrator = view.chapter.narrator;
@@ -426,6 +515,8 @@ export function chapterPeople(view: ProgressView, state: MapState): Set<string> 
   const setting = new Set([state.focus, view.chapter.system].filter((x): x is string => !!x));
   for (const pl of state.places) if (setting.has(pl.id)) for (const id of [...pl.bobs, ...pl.others]) out.add(id);
   for (const id of view.newHere.bobs) out.add(id);
+  for (const c of state.calls) out.add(c.who);
+  for (const c of view.chapter.cast) out.add(c.id);
   for (const m of view.newHere.moves) out.add(m.bob);
   for (const f of view.newHere.fates) out.add(f.bob);
   return out;
@@ -435,20 +526,27 @@ export function chapterPeople(view: ProgressView, state: MapState): Set<string> 
 export function chapterPlaces(view: ProgressView, state: MapState): Set<string> {
   const out = new Set([state.focus, view.chapter.system].filter((x): x is string => !!x));
   for (const m of view.newHere.moves) for (const id of [m.from, m.to, m.at]) if (id) out.add(id);
+  for (const c of state.calls) for (const p of [c.from, c.to]) if (p) out.add(p);
   return out;
 }
 
-/** The map state with the hidden layers taken out. Only removes: it never adds a place, a person or a journey. Names
+/** The map state with the hidden layers taken out. Only removes: it never adds a place, a person or a journey (the SCUT
+ * layer on only stops removing the systems on the network). Names
  * and travel history are drawing choices (see the map scene); everything else is applied here. */
 export function filterMapState(view: ProgressView, state: MapState, layers: MapLayers): MapState {
   const people = chapterPeople(view, state);
   const chapterAt = chapterPlaces(view, state);
   const pass = (mode: LayerMode, inChapter: boolean) => mode === 'show' || (mode === 'chapter' && inChapter);
   const keepWho = (id: string, isOther: boolean) => pass(isOther ? layers.others : layers.bobs, people.has(id));
+  // SCUT network on: every system on it stays (its people follow their own layers).
+  const net = layers.scut !== 'hide';
   const voyages = state.voyages.filter((v) => keepWho(v.who, v.isOther) && pass(layers.journeys, people.has(v.who)));
   // Places that must stay: where the chapter is set, and both ends of every journey still drawn.
   const needed = new Set([state.focus, view.chapter.system].filter((x): x is string => !!x));
   for (const v of voyages) for (const id of [v.from, v.to]) if (id) needed.add(id);
+  const calls = state.calls.filter((c) => c.pov || keepWho(c.who, c.isOther));
+  for (const c of calls) for (const p of [c.from, c.to]) if (p) needed.add(p);
+  if (net) for (const pl of state.places) if (pl.scut) needed.add(pl.id);
   const places: MapPlace[] = [];
   for (const pl of state.places) {
     const bobs = pl.bobs.filter((id) => keepWho(id, false));
@@ -468,8 +566,9 @@ export function filterMapState(view: ProgressView, state: MapState, layers: MapL
     places,
     voyages,
     hops: state.hops.filter((hp) => who.has(hp.who)),
-    scutLinks: state.scutLinks.filter(([a, b]) => placeIds.has(a) && placeIds.has(b)),
+    scutLinks: layers.scut === 'hide' ? [] : state.scutLinks.filter(([a, b]) => placeIds.has(a) && placeIds.has(b)),
     ghosts: state.ghosts.filter((g) => keepWho(g.who, g.isOther)),
+    calls: calls.filter((c) => who.has(c.who) || (c.from === null && voyages.some((v) => v.who === c.who))),
   };
 }
 
@@ -938,4 +1037,62 @@ export function mapSummary(view: ProgressView, state: MapState): MapSummary {
   const systems = state.places.filter((p) => p.id !== place && p.bobs.length + p.others.length > 0).length;
   const enRoute = state.voyages.filter((v) => v.isOther || v.who !== narrator).length;
   return { narrator, where, place, to, transit, here, systems, enRoute, empty: state.places.length === 0 };
+}
+
+/** The SCUT network on a map date: every system with a Bob on SCUT there, and how far it reaches from the origin. */
+export interface ScutNetwork {
+  /** Member systems, with or without a position. */
+  ids: string[];
+  /** Members with a position (they shape the shaded area). */
+  placed: string[];
+  /** The place at the origin of the frame (Sol), from the data. */
+  origin: string | null;
+  /** Light years from the origin to the farthest placed member. */
+  reachLy: number | null;
+}
+
+export function scutNetwork(state: MapState): ScutNetwork {
+  const members = state.places.filter((p) => p.scut);
+  const placed = members.filter((p) => p.pos);
+  const atOrigin = state.places.filter((p) => p.pos && distanceLy(p.pos) < 1e-5);
+  const origin = (atOrigin.find((p) => p.kind !== 'near') ?? atOrigin[0])?.id ?? null;
+  const reachLy = origin && placed.length ? Math.max(...placed.map((p) => distanceLy(p.pos!))) : null;
+  return { ids: members.map((p) => p.id), placed: placed.map((p) => p.id), origin, reachLy };
+}
+
+/** The layer's name: "Bobnet" once the books have used the word in what the reader has met; SCUT until then. */
+export function scutLabel(view: ProgressView): string {
+  const named = [...view.scut, ...view.milestones].some((r) => /bobnet/i.test(r.text ?? ''));
+  return named ? 'Bobnet' : 'SCUT';
+}
+
+/** "Bobnet · 12 systems · 30 ly from Sol", shorter for a narrow map (short 1: no "from Sol"; 2: no reach). In a
+ * flashback, the count at NOW follows when it differs. Null with no members. */
+export function scutText(label: string, n: ScutNetwork, now: ScutNetwork | null, short: 0 | 1 | 2 = 0): string | null {
+  if (!n.ids.length) return null;
+  const parts = [label, `${n.ids.length} ${n.ids.length === 1 ? 'system' : 'systems'}`];
+  if (short < 2 && n.reachLy != null && n.reachLy >= 0.5) parts.push(`${Math.round(n.reachLy)} ly${short === 0 && n.origin ? ` from ${n.origin}` : ''}`);
+  if (now && now.ids.length !== n.ids.length) parts.push(`NOW ${now.ids.length}`);
+  return parts.join(' · ');
+}
+
+/** The same for a screen reader (appended to the header card's label). */
+export function scutSpoken(label: string, n: ScutNetwork, now: ScutNetwork | null): string {
+  const later = now && now.ids.length !== n.ids.length ? `; ${now.ids.length} at NOW` : '';
+  if (!n.ids.length) return ` ${label}: none on this date${later}.`;
+  const count = `${n.ids.length} ${n.ids.length === 1 ? 'system' : 'systems'}`;
+  const reach = n.reachLy != null && n.reachLy >= 0.5 && n.origin ? `, farthest ${Math.round(n.reachLy)} light years from ${n.origin}` : '';
+  return ` ${label}: ${count}${reach}${later}.`;
+}
+
+/** SCUT's working range round each system on it, once the reader has learnt it (the latest revealed figure). */
+export function scutRangeLy(view: ProgressView): number | null {
+  const raw = view.model.data.settings?.scutRange;
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  let best: ScutRange | null = null;
+  for (const r of list) {
+    if (typeof r?.ly !== 'number' || !(r.ly > 0) || rank(r.reveal) > view.P) continue;
+    if (!best || rank(r.reveal) >= rank(best.reveal)) best = r;
+  }
+  return best?.ly ?? null;
 }

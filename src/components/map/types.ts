@@ -15,8 +15,9 @@ export interface MapHit {
 /** A request to move the pivot. n increments on every request, so asking again for the same target still moves. */
 export interface PivotRequest {
   n: number;
-  /** A place, a person (to where he is drawn now), or a voyage group; null: back to the default (recentre). */
-  target: MapHit | null;
+  /** A place, a person (to where he is drawn now), a voyage group, or the whole SCUT network (framed); null: back to
+   * the default (recentre). */
+  target: MapHit | { kind: 'scut' } | null;
 }
 
 export interface StarMapProps {
@@ -54,5 +55,11 @@ export interface StarMapProps {
   fitState?: MapState;
   /** Fixed spot (left end) of the distance scale bar, bottom left of the map. */
   scaleBar?: { x: number; y: number } | null;
+  /** SCUT layer shown, in a flashback: the systems on the network at NOW, when they differ from the map date. */
+  scutNow?: string[] | null;
+  /** SCUT layer shown: the line under the scale bar, longest first. */
+  scutText?: string[] | null;
+  /** Ripples and voyage glints move (default true); false while the map is off screen. */
+  animate?: boolean;
   style?: StyleProp<ViewStyle>;
 }

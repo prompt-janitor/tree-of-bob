@@ -41,7 +41,7 @@ export default function TreeScreen() {
 
   const rows = useMemo(() => treeRows(view, treeToggles, filter, selected), [view, treeToggles, filter, selected]);
   const axis = useMemo(() => axisFor(view, zoom), [view, zoom]);
-  const ringIds = useMemo(() => new Set([view.chapter.narrator, ...view.chapter.travelling, ...view.chapter.here].filter(Boolean) as string[]), [view]);
+  const ringIds = useMemo(() => new Set([view.chapter.narrator, ...view.chapter.travelling, ...view.chapter.here, ...view.chapter.cast.filter((c) => !c.remote && !c.isOther).map((c) => c.id)].filter(Boolean) as string[]), [view]);
   const lineage = useMemo(() => (selected && view.info.has(selected) ? new Set([selected, ...ancestors(view, selected)]) : null), [selected, view]);
   // Regular widths: up to 260 pt for the name and location, but never more than half the list (the drawer may be open).
   const nameWidth = compact ? Math.min(176, Math.round(width * 0.42)) : Math.min(260, Math.round((listWidth || width) * 0.5));

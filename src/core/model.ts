@@ -128,6 +128,34 @@ export function headingSetting(model: Model, place: string | null | undefined): 
   return system ? { kind: 'system', system } : null;
 }
 
+/** Where a chapter is set. Before it is read, only its heading counts. Once read, the data's own `system` takes over
+ * for a heading set in a system (or one with no place the app can read); a heading that says the narrator is
+ * travelling stays as it is. */
+export function chapterSetting(model: Model, ch: Chapter, read: boolean): Setting | null {
+  const heading = headingSetting(model, ch.place);
+  if (!read || typeof ch.system !== 'string' || !ch.system) return heading;
+  if (heading?.kind === 'enroute' || heading?.kind === 'deep') return heading;
+  if (heading?.kind === 'approach' && heading.system === ch.system) return heading;
+  return { kind: 'system', system: ch.system };
+}
+
+/** Whether two places are one: the same id, or a place set at zero distance from the other (kind "near", offset 0),
+ * such as a world in orbit round its star. */
+export function samePlace(model: Model, a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  return anchorOf(model, a) === anchorOf(model, b);
+}
+
+function anchorOf(model: Model, id: string): string {
+  let at = id;
+  for (let i = 0; i < 8; i++) {
+    const s = model.data.systems?.find((x) => x.id === at);
+    if (!s || s.kind !== 'near' || !s.near || s.offsetLy !== 0) return at;
+    at = s.near;
+  }
+  return at;
+}
+
 export function systemIn(model: Model, place: string | null | undefined): string | null {
   if (!place) return null;
   const p = place.toLowerCase();

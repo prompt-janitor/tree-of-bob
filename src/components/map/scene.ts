@@ -3,8 +3,11 @@
 // drawing worklet, which projects it with the live camera on every frame. No Skia imports here: the web build loads
 // Skia lazily. The vocabulary: the past lies on the floor, the present is in the air.
 import {
+  LOCAL_RADIUS_LY,
   LY_PER_PC,
   agoText,
+  distanceLy,
+  placePositions,
   chapterPeople,
   groupVoyages,
   lerp3,
@@ -15,6 +18,7 @@ import {
   voyageText,
   yearText,
   type LayerMode,
+  type ScutMode,
   type MapPresence,
   type MapState,
   type ProgressView,
@@ -124,6 +128,10 @@ export interface SceneNode {
   namesInLabel: boolean;
   /** Colonies, outposts and territory here (ink rings round the marker). */
   presence: MapPresence['kind'][];
+  /** On the SCUT network on the map date. */
+  scut: boolean;
+  /** Its position is a best guess (hollow dashed marker, "?" after the name). */
+  guess: boolean;
 }
 
 export interface SceneVoyage {
@@ -157,6 +165,18 @@ export interface SceneHop {
   /** Null: origin not on this level (only the arrival gate is drawn). */
   a: Vec3 | null;
   b: Vec3;
+  dim: boolean;
+}
+
+/** Calling in: a straight line from where someone is to where the chapter is set. */
+export interface SceneCall {
+  who: string;
+  /** Null: another replicant (ink). */
+  colour: string | null;
+  a: Vec3;
+  b: Vec3;
+  /** The narrator of the current chapter (dashed, with an arrowhead); otherwise the chapter just read (dotted). */
+  pov: boolean;
   dim: boolean;
 }
 
@@ -264,7 +284,20 @@ export interface Scene {
   voyages: SceneVoyage[];
   hops: SceneHop[];
   ghosts: SceneGhost[];
+  calls: SceneCall[];
   scut: [Vec3, Vec3][];
+  /** The network's pulse: for each possible start (scutRoots of them), each link's hops from it, flattened
+   * [root * scut.length + link]. */
+  scutHops: number[];
+  scutRoots: number;
+  /** SCUT layer shown: the points the shaded network area wraps (empty otherwise or while a Bob is selected). */
+  scutHull: Vec3[];
+  /** In a flashback: the same at NOW, when it differs (outline only). */
+  scutNowHull: Vec3[];
+  /** SCUT's working range (parsecs) once known: the volume reaches that far round each point. */
+  scutPad: number | null;
+  /** Where a caller on his way is estimated to be (no revealed arrival): a dashed ring, the ripples start there. */
+  estimates: Vec3[];
   tracks: SceneTrack[];
   diamonds: SceneDiamond[];
   labels: SceneLabel[];
@@ -337,15 +370,30 @@ export interface SceneInput {
   /** The whole map state before layers were hidden: the default camera frames its places, so hiding a layer never
    * changes the zoom. Defaults to `state`. */
   fitState?: MapState;
+  /** The SCUT layer's mode: volume shades the network. */
+  scut?: ScutMode;
+  /** SCUT's working range (ly) once known: the volume reaches that far round each system on it. */
+  scutRangeLy?: number | null;
+  /** In a flashback with the SCUT layer shown: the member systems at NOW (null: same as the map date). */
+  scutNow?: string[] | null;
 }
 
-export function buildScene({ view, state, level, selectedBob, callout, colourOf, palette: pal, names = 'show', history = 'chapter', fitState }: SceneInput): Scene {
+export function buildScene({ view, state, level, selectedBob, callout, colourOf, palette: pal, names = 'show', history = 'chapter', fitState, scut: scutMode = 'show', scutNow = null, scutRangeLy = null }: SceneInput): Scene {
   const galaxy = level === 'galaxy';
   const t = state.time;
   const narrator = view.chapter.narrator;
   const placeById = new Map(state.places.map((pl) => [pl.id, pl]));
   // Where a place is drawn on this level: local places collapse to Sol on the galaxy level; far places are not on
   // the local level. Only known places (state.places) are ever drawn.
+  const netShown = scutMode === 'volume';
+  // A NOW member not known on the map date: its position, on the same level rule.
+  const positions = scutNow ? placePositions(view.model) : null;
+  const atNow = (id: string): Vec3 | null => {
+    const ps = positions?.get(id);
+    if (!ps) return null;
+    const local = distanceLy(ps) <= LOCAL_RADIUS_LY;
+    return galaxy ? (local ? SOL : ps) : local ? ps : null;
+  };
   const at = (id: string | null | undefined): Vec3 | null => {
     if (!id) return null;
     const pl = placeById.get(id);
@@ -397,7 +445,7 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
     if (galaxy && pl.local) {
       cluster ??= {
         key: 'sol-neighbourhood', ids: [], p: SOL, puck: false, chapterRing: false, pips: [], more: 0, lost: 0, count: 0,
-        dim: false, empty: false, cluster: true, name: 'Sol neighbourhood', drop: false, namesInLabel: false, presence: [],
+        dim: false, empty: false, cluster: true, name: 'Sol neighbourhood', drop: false, namesInLabel: false, presence: [], scut: false, guess: false,
       };
       cluster.puck ||= pov;
       cluster.count += count;
@@ -412,12 +460,14 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
     if (hit) {
       hit.ids.push(pl.id);
       hit.name = `${hit.name} / ${pl.id}`;
+      hit.guess ||= !!pl.guess;
       hit.puck ||= pov;
       hit.pips.push(...pips);
       hit.lost += pl.lost.length;
       hit.count += count;
       hit.presence.push(...pl.presence.map((x) => x.kind));
-      hit.empty = hit.count === 0 && hit.lost === 0 && hit.presence.length === 0;
+      hit.empty = hit.count === 0 && hit.lost === 0 && hit.presence.length === 0 && !(netShown && (hit.scut || pl.scut));
+      hit.scut ||= pl.scut;
       const lf = lineFor.get(hit)!;
       lf.people.push(...people);
       lf.pov ||= pov;
@@ -425,8 +475,8 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
     } else {
       const n: SceneNode = {
         key: pl.id, ids: [pl.id], p: pl.pos, puck: pov, chapterRing: false, pips, more: 0, lost: pl.lost.length, count,
-        dim: false, empty: count === 0 && pl.lost.length === 0 && pl.presence.length === 0, cluster: false, name: pl.id, drop: false, namesInLabel: false,
-        presence: pl.presence.map((x) => x.kind),
+        dim: false, empty: count === 0 && pl.lost.length === 0 && pl.presence.length === 0 && !(netShown && pl.scut), cluster: false, name: pl.id, drop: false, namesInLabel: false, guess: !!pl.guess,
+        presence: pl.presence.map((x) => x.kind), scut: pl.scut,
       };
       nodes.push(n);
       lineFor.set(n, { people, pov, presence: [...pl.presence] });
@@ -436,11 +486,14 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
     // The narrator's (or focus) place opens first when several share a point.
     const first = n.ids.findIndex((id) => id === focusPlace || placeById.get(id)?.narrator);
     if (first > 0) n.ids.unshift(...n.ids.splice(first, 1));
-    if (!narrator && view.chapter.system && n.ids.includes(view.chapter.system)) n.chapterRing = true;
+    // The chapter ring: the chapter is set here but its narrator is not a Bob, or he calls in from somewhere else.
+    if ((!narrator || state.calls.some((c) => c.pov)) && view.chapter.system && n.ids.includes(view.chapter.system)) n.chapterRing = true;
     if (sel) n.dim = !n.pips.some((x) => inLine.has(x.id)) && !n.ids.some((id) => routePlaces.has(id) || id === focusPlace) && !n.puck;
     n.more = Math.max(0, n.pips.length - MAX_PIPS);
     n.pips = n.pips.slice(0, MAX_PIPS);
   }
+  // On the galaxy level a local chapter system is inside the Sol neighbourhood marker: the ring goes there.
+  if (cluster && state.calls.some((c) => c.pov) && view.chapter.system && placeById.get(view.chapter.system)?.local && placeById.get(view.chapter.system)?.pos) cluster.chapterRing = true;
   if (cluster) nodes.unshift(cluster);
 
   // --- Voyages: one solid line with chevrons per group.
@@ -552,15 +605,79 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
     whereNow[g.who] ??= b;
   }
 
-  // --- SCUT links (hidden in lineage mode).
+  // --- Calling in: from where each caller is to where the chapter is set. A caller on his way calls in from his
+  // position on the line, known or (no revealed arrival) estimated.
+  const onWay = new Map<string, { p: Vec3; estimated: boolean }>();
+  for (const v of state.voyages) {
+    const f = v.fraction ?? v.estimate;
+    const a = at(v.from);
+    const b = at(v.to);
+    if (f != null && a && b) onWay.set(v.who, { p: lerp3(a, b, f), estimated: v.fraction == null });
+  }
+  const calls: SceneCall[] = [];
+  const estimates: Vec3[] = [];
+  for (const c of state.calls) {
+    const w = c.from ? null : onWay.get(c.who) ?? null;
+    if (w?.estimated && !estimates.some((e) => same(e, w.p))) estimates.push(w.p);
+    const a = c.from ? at(c.from) : w?.p ?? null;
+    const b = at(c.to);
+    if (!a || !b || same(a, b)) continue;
+    calls.push({ who: c.who, colour: colour(c.who), a, b, pov: c.pov, dim: dimOf(c.who) });
+  }
+
+  // --- SCUT links (hidden in lineage mode). For the network's pulse, each link's hop count from every system on
+  // the network (the motion layer picks where each pulse starts).
   const scut: [Vec3, Vec3][] = [];
-  if (!sel) {
-    for (const [x, y] of state.scutLinks) {
+  const scutHops: number[] = [];
+  let scutRoots = 0;
+  if (!sel && state.scutLinks.length) {
+    const kept = state.scutLinks.filter(([x, y]) => {
       const a = at(x);
       const b = at(y);
-      if (a && b && !same(a, b)) scut.push([a, b]);
+      return !!a && !!b && !same(a, b);
+    });
+    for (const [x, y] of kept) scut.push([at(x)!, at(y)!]);
+    const members = [...new Set(kept.flat())];
+    scutRoots = members.length;
+    for (const root of members) {
+      const hops = new Map<string, number>([[root, 0]]);
+      for (let queue = [root]; queue.length; ) {
+        const next: string[] = [];
+        for (const id of queue) {
+          for (const [x, y] of state.scutLinks) {
+            const other = x === id ? y : y === id ? x : null;
+            if (other && !hops.has(other)) {
+              hops.set(other, hops.get(id)! + 1);
+              next.push(other);
+            }
+          }
+        }
+        queue = next;
+      }
+      for (const [x, y] of kept) scutHops.push(Math.min(hops.get(x) ?? 0, hops.get(y) ?? 0));
     }
   }
+
+  // --- SCUT network area (shown, nothing selected): member points, and at NOW in a flashback.
+  const hullOf = (ids: string[]) => {
+    const pts: Vec3[] = [];
+    for (const id of ids) {
+      const p = at(id) ?? atNow(id);
+      if (p && !pts.some((q) => same(p, q))) pts.push(p);
+    }
+    return pts;
+  };
+  const scutHull = netShown && !sel ? hullOf(state.places.filter((pl) => pl.scut).map((pl) => pl.id)) : [];
+  // Ships on SCUT on their way are part of the network too.
+  if (netShown && !sel) {
+    for (const v of state.voyages) {
+      const w = v.scut ? onWay.get(v.who) : null;
+      if (w && !scutHull.some((q) => same(q, w.p))) scutHull.push(w.p);
+    }
+  }
+  const scutNowHull = netShown && !sel && scutNow ? hullOf(scutNow) : [];
+  // Members keep their drop lines while the network is shown, so its height reads at rest.
+  if (netShown && !sel) for (const n of nodes) if (n.scut) n.drop = true;
 
   const floorLabels: SceneLabel[] = [];
   let lastStop: Vec3 | null = null;
@@ -715,6 +832,8 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
   // --- Labels, in priority order: the focus place, the selected Bob's stops, busy places, voyage groups, voyage
   // destinations, empty places.
   const labels: { prio: number; l: SceneLabel }[] = [];
+  // A best-guess position: "?" after the name.
+  const labelOf = (id: string) => (placeById.get(id)?.guess ? `${id} ?` : id);
   nodes.forEach((n, i) => {
     const lf = lineFor.get(n);
     const isFocus = n.ids.includes(focusPlace ?? '\u0000') || n.puck;
@@ -723,9 +842,9 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
       lines.push({ text: 'Sol neighbourhood', font: 'label', tone: 'ink' });
       lines.push({ text: n.count ? plural(n.count, 'person', 'people') : 'nobody', font: 'line2', tone: 'ink2' });
     } else if (n.empty) {
-      lines.push({ text: n.ids.join(' / '), font: 'small', tone: 'ink3' });
+      lines.push({ text: n.ids.map(labelOf).join(' / '), font: 'small', tone: 'ink3' });
     } else {
-      for (const id of n.ids) lines.push({ text: id, font: 'label', tone: 'ink' });
+      for (const id of n.ids) lines.push({ text: labelOf(id), font: 'label', tone: 'ink' });
       const people = lf?.people ?? [];
       const namesOn = names === 'show' || (names === 'chapter' && people.some((x) => inChapter!.has(x.id)));
       if (namesOn && people.length) {
@@ -784,7 +903,14 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
     voyages,
     hops,
     ghosts,
+    calls,
     scut,
+    scutHops,
+    scutRoots,
+    scutHull,
+    scutNowHull,
+    scutPad: netShown && scutRangeLy ? scutRangeLy / LY_PER_PC : null,
+    estimates,
     tracks,
     diamonds,
     labels: labels.map((x) => x.l),
@@ -862,4 +988,89 @@ export function pipOffset(i: number, n: number, puck = false): { dx: number; dy:
   const inRow = Math.min(PIP_ROW, n - row * PIP_ROW);
   const col = i - row * PIP_ROW;
   return { dx: (col - (inRow - 1) / 2) * PIP_GAP, dy: 13 + row * PIP_ROW_GAP + (puck ? PUCK_PIP_SHIFT : 0) };
+}
+
+/** Convex hull of screen points [x, y, ...], counter-clockwise, as [x, y, ...] (monotone chain). Handles 0, 1, 2
+ * and collinear points. */
+export function convexHull2d(pts: number[]): number[] {
+  'worklet';
+  const n = pts.length / 2;
+  const idx: number[] = [];
+  for (let i = 0; i < n; i++) idx.push(i);
+  idx.sort((a, b) => pts[a * 2] - pts[b * 2] || pts[a * 2 + 1] - pts[b * 2 + 1]);
+  const uniq: number[] = [];
+  for (const i of idx) {
+    const j = uniq[uniq.length - 1];
+    if (j === undefined || Math.abs(pts[i * 2] - pts[j * 2]) > 0.01 || Math.abs(pts[i * 2 + 1] - pts[j * 2 + 1]) > 0.01) uniq.push(i);
+  }
+  if (uniq.length < 3) return uniq.flatMap((i) => [pts[i * 2], pts[i * 2 + 1]]);
+  const cross = (o: number, a: number, b: number) =>
+    (pts[a * 2] - pts[o * 2]) * (pts[b * 2 + 1] - pts[o * 2 + 1]) - (pts[a * 2 + 1] - pts[o * 2 + 1]) * (pts[b * 2] - pts[o * 2]);
+  const lower: number[] = [];
+  for (const i of uniq) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], i) <= 0) lower.pop();
+    lower.push(i);
+  }
+  const upper: number[] = [];
+  for (let k = uniq.length - 1; k >= 0; k--) {
+    const i = uniq[k];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], i) <= 0) upper.pop();
+    upper.push(i);
+  }
+  const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+  // All collinear: the two ends.
+  if (hull.length < 3) return [uniq[0], uniq[uniq.length - 1]].flatMap((i) => [pts[i * 2], pts[i * 2 + 1]]);
+  return hull.flatMap((i) => [pts[i * 2], pts[i * 2 + 1]]);
+}
+
+/** The outline round a convex hull (from convexHull2d) at distance pad, with round corners, as a closed polyline
+ * [x, y, ...]: a circle for one point, a capsule for two. Works for either winding. */
+export function roundedHull(hull: number[], pad: number): number[] {
+  'worklet';
+  const n = hull.length / 2;
+  const out: number[] = [];
+  if (n === 0) return out;
+  const STEP = Math.PI / 12;
+  // An arc round (cx, cy) from angle a0, turning by sweep (signed).
+  const arc = (cx: number, cy: number, a0: number, sweep: number) => {
+    const k = Math.max(1, Math.ceil(Math.abs(sweep) / STEP));
+    for (let i = 0; i <= k; i++) {
+      const a = a0 + (sweep * i) / k;
+      out.push(cx + Math.cos(a) * pad, cy + Math.sin(a) * pad);
+    }
+  };
+  if (n === 1) {
+    arc(hull[0], hull[1], 0, Math.PI * 2 - STEP);
+    return out;
+  }
+  let mx = 0;
+  let my = 0;
+  for (let i = 0; i < n; i++) {
+    mx += hull[i * 2] / n;
+    my += hull[i * 2 + 1] / n;
+  }
+  // The outward normal angle of the edge from vertex a to vertex b (away from the centre).
+  const normal = (a: number, b: number) => {
+    const dx = hull[b * 2] - hull[a * 2];
+    const dy = hull[b * 2 + 1] - hull[a * 2 + 1];
+    const ex = (hull[a * 2] + hull[b * 2]) / 2 - mx;
+    const ey = (hull[a * 2 + 1] + hull[b * 2 + 1]) / 2 - my;
+    return dy * ex - dx * ey >= 0 ? Math.atan2(-dx, dy) : Math.atan2(dx, -dy);
+  };
+  if (n === 2) {
+    // A capsule: from one side's normal, round the far end (through the direction of travel), then round the near end.
+    const a = normal(0, 1);
+    const d = Math.atan2(hull[3] - hull[1], hull[2] - hull[0]);
+    const sweep = Math.cos(a + Math.PI / 2 - d) > 0 ? Math.PI : -Math.PI;
+    arc(hull[2], hull[3], a, sweep);
+    arc(hull[0], hull[1], a + Math.PI, sweep);
+    return out;
+  }
+  for (let i = 0; i < n; i++) {
+    const a0 = normal((i - 1 + n) % n, i);
+    const a1 = normal(i, (i + 1) % n);
+    const sweep = Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0));
+    arc(hull[i * 2], hull[i * 2 + 1], a0, sweep);
+  }
+  return out;
 }
