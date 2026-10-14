@@ -1,5 +1,5 @@
 // Life lanes on a shared time axis. Names stay pinned on the left so they never scroll off screen.
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import Svg, { Line, Rect } from 'react-native-svg';
 
@@ -23,6 +23,11 @@ export function DashedRule({ height, color, width = 1.5 }: { height: number; col
 
 export function TimeAxisBar({ axis, nameWidth, rightPad, label, onLabelPress }: { axis: Axis; nameWidth: number; rightPad: number; label: string; onLabelPress?: () => void }) {
   const p = usePalette();
+  // The CH badge sits over the chapter date, but never under NOW: near NOW it stops just left of it.
+  const [trackW, setTrackW] = useState(0);
+  const [nowW, setNowW] = useState(0);
+  const [chW, setChW] = useState(0);
+  const chLeft = axis.ch != null && trackW ? Math.min(frac(axis, axis.ch) * trackW - 14, trackW - nowW - chW - 4) : null;
   return (
     <View style={{ height: 32, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderColor: p.line, backgroundColor: p.bg }}>
       <Pressable onPress={onLabelPress} disabled={!onLabelPress} accessibilityRole="button" accessibilityLabel={`Time range: ${label}`}
@@ -30,7 +35,7 @@ export function TimeAxisBar({ axis, nameWidth, rightPad, label, onLabelPress }: 
         <T variant="data" numberOfLines={1}>{label}</T>
         {onLabelPress ? <Icon name="chevronDown" color={p.ink} size={12} strokeWidth={2.4} /> : null}
       </Pressable>
-      <View style={{ flex: 1, height: 32, marginRight: rightPad }}>
+      <View style={{ flex: 1, height: 32, marginRight: rightPad }} onLayout={(e) => setTrackW(e.nativeEvent.layout.width)}>
         {axis.ticks.map((t, i) => {
           const f = frac(axis, t.year);
           if (f > 0.9 || (axis.ch != null && Math.abs(f - frac(axis, axis.ch)) < 0.08)) return null;
@@ -41,11 +46,13 @@ export function TimeAxisBar({ axis, nameWidth, rightPad, label, onLabelPress }: 
           );
         })}
         {axis.ch != null ? (
-          <View style={{ position: 'absolute', left: `${frac(axis, axis.ch) * 100}%`, top: 7, transform: [{ translateX: -14 }], borderWidth: 1.5, borderColor: p.ink, borderRadius: 3, paddingHorizontal: 3, backgroundColor: p.bg }}>
+          <View
+            onLayout={(e) => setChW(e.nativeEvent.layout.width)}
+            style={[{ position: 'absolute', top: 7, borderWidth: 1.5, borderColor: p.ink, borderRadius: 3, paddingHorizontal: 3, backgroundColor: p.bg }, chLeft != null ? { left: chLeft } : { left: `${frac(axis, axis.ch) * 100}%`, transform: [{ translateX: -14 }] }]}>
             <T variant="tag">CH</T>
           </View>
         ) : null}
-        <View style={{ position: 'absolute', right: 0, top: 7, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1, backgroundColor: p.ink }}>
+        <View onLayout={(e) => setNowW(e.nativeEvent.layout.width)} style={{ position: 'absolute', right: 0, top: 7, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1, backgroundColor: p.ink }}>
           <T variant="tag" color={p.inv}>NOW</T>
         </View>
       </View>
@@ -102,7 +109,9 @@ export const LaneRow = memo(function LaneRow({ row, axis, nameWidth, rightPad, d
   const ch = view.chapter;
   const c = colourOf(row.id);
   const isNarrator = ch.narrator === row.id;
-  const inSystem = ch.here.includes(row.id) || ch.travelling.includes(row.id) || ch.lostHere.includes(row.id);
+  const castAs = ch.cast.find((x) => x.id === row.id);
+  const calling = !isNarrator && !!castAs?.remote && !ch.travelling.includes(row.id);
+  const inSystem = !calling && (ch.here.includes(row.id) || ch.travelling.includes(row.id) || ch.lostHere.includes(row.id) || !!castAs);
   const lane = laneFor(view, row.id, axis, ringIds);
   const h = dense ? 28 : 48;
   const dim = (lineage && !lineage.has(row.id)) || row.ancestorOnly;
@@ -114,7 +123,7 @@ export const LaneRow = memo(function LaneRow({ row, axis, nameWidth, rightPad, d
     I.generation ? `generation ${I.generation}` : 'parent not known',
     I.bob.parent && view.info.has(I.bob.parent) ? `copied from ${I.bob.parent}` : null,
     I.status === 'lost' ? `lost ${Math.floor(I.end)}` : I.status === 'missing' ? 'missing' : I.inTransit ? `in transit to ${I.inTransit.to ?? 'an unknown destination'}` : I.loc ? `at ${I.loc}` : null,
-    isNarrator ? 'narrating this chapter' : null,
+    isNarrator ? 'narrating this chapter' : calling ? 'calling in to this chapter' : null,
     I.isNew ? 'new in the last chapter' : null,
     row.hidden ? `${row.hidden} more in collapsed branch` : null,
   ].filter(Boolean).join(', ');
@@ -181,6 +190,7 @@ export const LaneRow = memo(function LaneRow({ row, axis, nameWidth, rightPad, d
               {row.id}
             </T>
             {tag && !lineage ? <Tag text={tag} /> : null}
+            {calling && !lineage ? <Icon name="signal" color={p.ink} size={dense ? 14 : 16} strokeWidth={2} /> : null}
             {/* Dense rows (iPad, web) have room for one line: the location follows the name. */}
             {dense && sub ? <T variant="secondary" tone="ink3" style={{ fontSize: 11, flexShrink: 1 }} numberOfLines={1}>{sub}</T> : null}
           </View>

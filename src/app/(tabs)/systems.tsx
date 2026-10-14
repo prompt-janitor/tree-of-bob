@@ -4,7 +4,7 @@
 // list modal (/systems-list).
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,6 +13,8 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg';
 import { Glass } from '@/components/glass';
 import { Icon } from '@/components/icon';
 import { ChapterHeaderCard } from '@/components/map/chapter-header-card';
+import { mapKeyItems } from '@/components/map/map-key';
+import { LEGEND_WIDTH, MapLegend } from '@/components/map/map-legend';
 import { BobContent, CalloutFrame, OffMapContent, PlaceContent, VoyageContent, voyageTitle } from '@/components/map/map-callout';
 import { useMapFocusRequests } from '@/components/map/map-requests';
 import { NarratorPuck } from '@/components/map/narrator-puck';
@@ -21,20 +23,21 @@ import { StarMap } from '@/components/map/star-map';
 import type { MapHit, MapLevel, PivotRequest } from '@/components/map/types';
 import { useContentInsets } from '@/components/screen';
 import { T } from '@/components/text';
-import { DEFAULT_LAYERS, filterMapState, groupVoyages, LAYER_KEYS, mapState, type LayerMode, type MapLayers } from '@/core';
+import { DEFAULT_LAYERS, filterMapState, groupVoyages, LAYER_KEYS, mapState, routes, scutLabel, scutNetwork, scutRangeLy, scutSpoken, scutText, type LayerMode, type MapLayers, type ScutMode } from '@/core';
 import { useLayout } from '@/hooks/use-layout';
 import { useOpenBob } from '@/hooks/use-open-bob';
 import { useApp } from '@/state/app';
+import { identityColour } from '@/theme/identity';
 import { mapPalette, type MapTone } from '@/theme/tokens';
 
 /** Every layer on Show (the panel's Show all button). */
-const ALL_LAYERS: MapLayers = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show' };
+const ALL_LAYERS: MapLayers = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show', scut: 'volume' };
 
 /** floating: the target is not drawn on this level, so the callout has no pointer. */
 type Callout = { hit: MapHit; from?: MapHit; floating?: boolean } | { offmap: true };
 
 export default function SystemsScreen() {
-  const { view, palette: p, selected, select, setNavCompact, colourOf, mapLayers, setMapLayers, mapLock, setMapLock, mapTone, setMapTone } = useApp();
+  const { view, palette: p, selected, select, setNavCompact, colourOf, mapLayers, setMapLayers, mapLock, setMapLock, mapTone, setMapTone, mapLegend, setMapLegend } = useApp();
   const mp = mapPalette(p, mapTone);
   // Whether this tab is showing (tabs stay mounted): only then does the darker map set a light status bar.
   const [focused, setFocused] = useState(false);
@@ -52,8 +55,26 @@ export default function SystemsScreen() {
   const date = view.chapter.time ?? view.latest ?? view.maxYear;
   // The header card counts the whole map; everything drawn and tappable uses only the layers that are on.
   const fullState = useMemo(() => mapState(view, date), [view, date]);
-  const state = useMemo(() => filterMapState(view, fullState, mapLayers), [view, fullState, mapLayers]);
+  // The SCUT layer exists once the reader has met SCUT; until then a saved Show does nothing.
+  const scutKnown = view.scut.length > 0;
+  const netLabel = scutLabel(view);
+  const layers = useMemo(() => (scutKnown ? mapLayers : { ...mapLayers, scut: 'hide' as const }), [scutKnown, mapLayers]);
+  const state = useMemo(() => filterMapState(view, fullState, layers), [view, fullState, layers]);
+  const netShown = layers.scut === 'volume';
+  const net = useMemo(() => scutNetwork(fullState), [fullState]);
+  const nowNet = useMemo(() => {
+    if (!netShown || view.chapter.flashbackYear == null || view.latest == null) return null;
+    const n = scutNetwork(mapState(view, view.latest));
+    return n.ids.length === net.ids.length && n.ids.every((id) => net.ids.includes(id)) ? null : n;
+  }, [netShown, view, net]);
+  const netText = useMemo(() => {
+    if (!netShown) return null;
+    const v = ([0, 1, 2] as const).map((k) => scutText(netLabel, net, nowNet, k)).filter((x): x is string => !!x);
+    return v.length ? v : null;
+  }, [netShown, netLabel, net, nowNet]);
   const [layersOpen, setLayersOpen] = useState(false);
+  // A network fit waiting for the Layers panel to close (phone).
+  const fitNet = useRef(false);
   const groups = useMemo(() => groupVoyages(state.voyages), [state]);
   // Galaxy is offered only once the reader has met a place outside the local neighbourhood.
   const hasFar = state.places.some((pl) => pl.pos && !pl.local);
@@ -63,7 +84,12 @@ export default function SystemsScreen() {
   const [levelRaw, setLevel] = useState<MapLevel>('local');
   const level: MapLevel = hasFar ? levelRaw : 'local';
   const [pivot, setPivot] = useState<PivotRequest>({ n: 0, target: null });
-  const pivotTo = (target: MapHit | null) => setPivot((r) => ({ n: r.n + 1, target }));
+  const pivotTo = (target: PivotRequest['target']) => setPivot((r) => ({ n: r.n + 1, target }));
+  useEffect(() => {
+    if (layersOpen || !fitNet.current) return;
+    fitNet.current = false;
+    setPivot((r) => ({ n: r.n + 1, target: { kind: 'scut' } }));
+  }, [layersOpen]);
   const [calloutRaw, setCallout] = useState<Callout | null>(null);
   const [selRaw, setSel] = useState<string | null>(null);
   const [offDefault, setOffDefault] = useState(false);
@@ -205,8 +231,25 @@ export default function SystemsScreen() {
   const toolSize = compact ? 44 : 48;
   const headerR = compact ? W - (header.right ?? 0) : (header.left ?? 0) + (header.width ?? 0);
   // (The React Compiler memoizes these, so the map re-records its picture only when they change.)
+  // The key beside the map (wide screens with room): only what is drawn now.
+  const legendRoom = !compact && W >= 700 && H >= 480;
+  const legendHistory = useMemo(() => (legendRoom && layers.history !== 'hide' && view.chapter.time != null ? [...routes(view, view.chapter.time).values()] : []), [legendRoom, layers.history, view]);
+  const legendItems = useMemo(
+    () =>
+      legendRoom
+        ? mapKeyItems({
+            view, states: [state], layers, palette: p, colour: identityColour(0, p.scheme), puckColour: narrator ? colourOf(narrator) : identityColour(0, p.scheme),
+            history: legendHistory, nowDiffers: !!nowNet, netLabel, rangeLy: scutRangeLy(view),
+          }).filter((i) => i.show && i.beside)
+        : [],
+    [legendRoom, view, state, layers, p, narrator, colourOf, legendHistory, nowNet, netLabel],
+  );
+  const legendHere = legendRoom && legendItems.length > 0;
+  const showLegend = legendHere && mapLegend && !layersOpen;
+  const [legendH, setLegendH] = useState(0);
   const chrome: { l: number; t: number; r: number; b: number }[] = [];
   if (W && H) {
+    if (showLegend && legendH) chrome.push({ l: W - 16 - LEGEND_WIDTH, t: H - pillBottom - legendH, r: W - 16, b: H - pillBottom });
     chrome.push({ l: header.left ?? 0, t: header.top, r: headerR, b: header.top + headerH });
     if (compact) {
       chrome.push({ l: W - 16 - 44, t: safe.top + 14, r: W - 16, b: safe.top + 58 });
@@ -219,7 +262,7 @@ export default function SystemsScreen() {
   }
   // The distance scale bar's fixed spot: bottom left of the map, above the off-map pill (the only distance cue), with
   // room under it for the viewport diameter line.
-  const scaleBar = W && H ? { x: 20, y: H - pillBottom - (nUnplaced ? 44 + 14 : 14) - 12 } : null;
+  const scaleBar = W && H ? { x: 20, y: H - pillBottom - (nUnplaced ? 44 + 14 : 14) - 12 - (netText ? 14 : 0) } : null;
   // The galaxy locator above it is the recentre control (drawn by the map; this button covers it).
   const locator = compassAt(scaleBar);
 
@@ -300,10 +343,26 @@ export default function SystemsScreen() {
     { key: 'names', label: 'Names' },
     { key: 'empty', label: 'Empty systems' },
     { key: 'presence', label: 'Colonies' },
+    ...(scutKnown ? [{ key: 'scut' as const, label: netLabel }] : []),
   ];
+  // Choosing to show the network frames it (on a phone, once the panel is closed), unless the centre is locked.
+  const setLayer = (key: (typeof LAYER_KEYS)[number], mode: LayerMode | ScutMode) => {
+    setMapLayers({ ...mapLayers, [key]: mode });
+    if (key === 'scut') fitNet.current = mode === 'volume' && !mapLock;
+    if (key === 'scut' && mode === 'volume' && !mapLock && !compact) {
+      fitNet.current = false;
+      pivotTo({ kind: 'scut' });
+    }
+  };
   const modes: { mode: LayerMode; label: string; w: number }[] = [
     { mode: 'chapter', label: 'Chapter', w: 66 },
     { mode: 'show', label: 'Show', w: 52 },
+    { mode: 'hide', label: 'Hide', w: 52 },
+  ];
+  // The network has no chapter mode: links, links and volume, or neither.
+  const netModes: { mode: ScutMode; label: string; w: number }[] = [
+    { mode: 'show', label: 'Show', w: 52 },
+    { mode: 'volume', label: 'Volume', w: 66 },
     { mode: 'hide', label: 'Hide', w: 52 },
   ];
   const layersPanel = layersOpen ? (
@@ -316,12 +375,12 @@ export default function SystemsScreen() {
         <View key={r.key} accessibilityRole="radiogroup" accessibilityLabel={r.label} style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 8, gap: 8 }}>
           <T variant="secondary" weight="600" style={{ flex: 1 }}>{r.label}</T>
           <View style={{ flexDirection: 'row', borderRadius: 12, backgroundColor: p.line }}>
-            {modes.map((m) => {
+            {(r.key === 'scut' ? netModes : modes).map((m) => {
               const on = mapLayers[r.key] === m.mode;
               return (
                 <Pressable
                   key={m.mode}
-                  onPress={() => setMapLayers({ ...mapLayers, [r.key]: m.mode })}
+                  onPress={() => setLayer(r.key, m.mode)}
                   accessibilityRole="radio"
                   accessibilityLabel={`${r.label}: ${m.label}`}
                   accessibilityState={{ selected: on }}
@@ -357,10 +416,10 @@ export default function SystemsScreen() {
       </View>
       <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 8, paddingTop: 6 }}>
         {[
-          { label: 'Show all', layers: ALL_LAYERS },
+          { label: 'Show all', layers: scutKnown ? ALL_LAYERS : { ...ALL_LAYERS, scut: mapLayers.scut } },
           { label: 'Defaults', layers: DEFAULT_LAYERS },
         ].map((b) => {
-          const current = LAYER_KEYS.every((k) => mapLayers[k] === b.layers[k]);
+          const current = layerRows.every((r) => mapLayers[r.key] === b.layers[r.key]);
           return (
             <Pressable
               key={b.label}
@@ -378,7 +437,11 @@ export default function SystemsScreen() {
     </Glass>
   ) : null;
   const keyButton = (
-    <ToolButton label="Map key" onPress={() => router.push('/key')} size={compact ? 44 : 48}>
+    <ToolButton
+      label={legendHere ? (mapLegend ? 'Hide the map key' : 'Show the map key') : 'Map key'}
+      onPress={() => (legendHere ? setMapLegend(!mapLegend) : router.push({ pathname: '/key', params: { from: 'map' } }))}
+      size={compact ? 44 : 48}
+      selected={legendHere && mapLegend}>
       <T variant="secondary" weight="700">Key</T>
     </ToolButton>
   );
@@ -399,7 +462,10 @@ export default function SystemsScreen() {
           onOffDefault={setOffDefault}
           onUnanchored={onUnanchored}
           locked={mapLock}
-          layers={mapLayers}
+          layers={layers}
+          scutNow={nowNet?.ids ?? null}
+          scutText={netText}
+          animate={focused}
           fitState={fullState}
           insets={insets}
           chrome={chrome}
@@ -408,8 +474,14 @@ export default function SystemsScreen() {
         />
       </View>
 
+      {showLegend ? (
+        <View style={{ position: 'absolute', right: 16, bottom: pillBottom }}>
+          <MapLegend items={legendItems} animate={focused} maxHeight={H - pillBottom - (16 + 48 + 8) - 16} onShowAll={() => router.push('/key')} onClose={() => setMapLegend(false)} onLayout={(e) => setLegendH(Math.round(e.nativeEvent.layout.height))} />
+        </View>
+      ) : null}
+
       <View style={[{ position: 'absolute' }, header]} onLayout={(e) => setHeaderH(Math.round(e.nativeEvent.layout.height))}>
-        <ChapterHeaderCard state={fullState} onPress={showNarrator} onShowList={showList} />
+        <ChapterHeaderCard state={fullState} onPress={showNarrator} onShowList={showList} spokenExtra={netShown && scutKnown ? scutSpoken(netLabel, net, nowNet) : undefined} />
       </View>
 
       {compact ? (

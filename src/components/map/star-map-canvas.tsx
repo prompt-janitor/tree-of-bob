@@ -11,14 +11,14 @@ import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PixelRatio, Platform, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector, MouseButton } from 'react-native-gesture-handler';
-import { Easing, type SharedValue, useAnimatedReaction, useDerivedValue, useReducedMotion, useSharedValue, withDelay, withSequence, withTiming } from 'react-native-reanimated';
+import { cancelAnimation, Easing, type SharedValue, useAnimatedReaction, useDerivedValue, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
-import { clampTilt, DEFAULT_TILT, DEFAULT_YAW, LY_PER_PC, MAX_TILT, pivotFit, type Camera, type Vec3 } from '@/core';
+import { clampTilt, DEFAULT_TILT, DEFAULT_YAW, LY_PER_PC, MAX_TILT, pivotFit, scutRangeLy, type Camera, type Vec3 } from '@/core';
 import { useApp } from '@/state/app';
 import { mapPalette } from '@/theme/tokens';
 
-import { arcPoint, dotObstacles, drawScene, edgeMarkers, proj, puckAt, trackEnds, voyageDots, type Box, type DrawHit, type Fonts } from './draw';
+import { arcPoint, dotObstacles, drawMotion, drawScene, edgeMarkers, MOTION_CYCLES, MOTION_MS, proj, puckAt, trackEnds, voyageDots, type Box, type DrawHit, type Fonts } from './draw';
 import { buildScene, scaleBarFor, type Scene } from './scene';
 import type { MapHit, StarMapProps } from './types';
 
@@ -61,7 +61,7 @@ export function anchorOf(scene: Scene, hit: MapHit | null): Vec3 | null {
 }
 
 export default function StarMapCanvas(props: StarMapProps) {
-  const { view, state, level, pivot, selectedBob, callout, insets, chrome, scaleBar, style, onPress, onPressEmpty, onPanStart, onOffDefault, onUnanchored, locked = false, layers, fitState } = props;
+  const { view, state, level, pivot, selectedBob, callout, insets, chrome, scaleBar, style, onPress, onPressEmpty, onPanStart, onOffDefault, onUnanchored, locked = false, layers, fitState, scutNow = null, scutText = null, animate = true } = props;
   const { palette: appPalette, colourIn, mapTone } = useApp();
   // Gaia's all-sky map of the Milky Way (ESA/Gaia/DPAC, CC BY-SA 3.0 IGO), greyscale, the band within 40 degrees.
   const milkyWay = useImage(require('./milky-way.jpg'));
@@ -90,7 +90,7 @@ export default function StarMapCanvas(props: StarMapProps) {
   const viewportPrefix = fonts && fonts.small.getGlyphIDs('\u2300')[0] !== 0 ? 'Viewport \u2300 ' : 'Viewport diameter ';
 
   const scene = useMemo(() => {
-    const sc = buildScene({ view, state, level, selectedBob, callout, colourOf, palette, names: layers?.names ?? 'show', history: layers?.history ?? 'chapter', fitState });
+    const sc = buildScene({ view, state, level, selectedBob, callout, colourOf, palette, names: layers?.names ?? 'show', history: layers?.history ?? 'chapter', fitState, scut: layers?.scut, scutNow, scutRangeLy: scutRangeLy(view) });
     // Superscript digits ("Omicron² Eridani") that the label font lacks are drawn as plain digits.
     if (fonts) {
       for (const l of sc.labels) {
@@ -102,7 +102,7 @@ export default function StarMapCanvas(props: StarMapProps) {
       for (const n of sc.nodes) n.name = plainDigits(n.name, fonts.label);
     }
     return sc;
-  }, [view, state, level, selectedBob, callout, colourOf, palette, fonts, layers?.names, layers?.history, fitState]);
+  }, [view, state, level, selectedBob, callout, colourOf, palette, fonts, layers?.names, layers?.history, layers?.scut, scutNow, fitState]);
 
   // Camera. The centre (ox, oy, oz) is always the pivot, its height included, so the pivot sits in the middle of the
   // map area, at the centre of the viewport globe, and turning or zooming never moves it. The floor is the horizontal
@@ -250,6 +250,18 @@ export default function StarMapCanvas(props: StarMapProps) {
         const f = setDefaults(scene);
         moveTo({ yaw: DEFAULT_YAW, tilt: DEFAULT_TILT, scale: f.scale, center: scene.pivot }, true);
         reveal();
+      } else if (pivot.target.kind === 'scut') {
+        // Frame the whole network, out to SCUT's range round each point once known, keeping the reader's turn and tilt.
+        const pad = scene.scutPad ?? 0;
+        const pts = pad > 0 ? scene.scutHull.flatMap((q) => [{ x: q.x - pad, y: q.y, z: q.z }, { x: q.x + pad, y: q.y, z: q.z }, { x: q.x, y: q.y - pad, z: q.z }, { x: q.x, y: q.y + pad, z: q.z }, { x: q.x, y: q.y, z: q.z - pad }, { x: q.x, y: q.y, z: q.z + pad }]) : scene.scutHull;
+        if (pts.length) {
+          const lo = { x: Math.min(...pts.map((p) => p.x)), y: Math.min(...pts.map((p) => p.y)), z: Math.min(...pts.map((p) => p.z)) };
+          const hi = { x: Math.max(...pts.map((p) => p.x)), y: Math.max(...pts.map((p) => p.y)), z: Math.max(...pts.map((p) => p.z)) };
+          const center = { x: (lo.x + hi.x) / 2, y: (lo.y + hi.y) / 2, z: (lo.z + hi.z) / 2 };
+          const f = pivotFit(center, pts, Math.max(40, inner.iw - 32), Math.max(40, inner.ih - 32), tilt.get(), { nth: 1e6, nearPc: 0 });
+          const half = Math.min(inner.iw, inner.ih) / 2;
+          moveTo({ center, scale: Math.min(half / ZOOM[scene.level].near, Math.max(half / ZOOM[scene.level].far, f.scale)) }, true);
+        }
       } else {
         const a = anchorOf(scene, pivot.target);
         if (a) moveTo({ center: a }, true);
@@ -314,10 +326,33 @@ export default function StarMapCanvas(props: StarMapProps) {
         scaleBarLy: barLy.get(),
         viewportPrefix,
         milkyWay,
+        scutText,
       });
     }
     return rec.finishRecordingAsPicture();
-  }, [scene, fonts, w, h, chrome, scaleBar, viewportPrefix, milkyWay]);
+  }, [scene, fonts, w, h, chrome, scaleBar, viewportPrefix, milkyWay, scutText]);
+
+  // The motion layer (ripples, voyage glints): its own picture, redrawn every frame only while something moves, so
+  // the map itself is drawn only when the camera or the scene changes. Still with Reduce Motion or off screen.
+  const phase = useSharedValue(0);
+  const flowing = animate && !reduceMotion && (scene.calls.length > 0 || scene.scut.length > 0 || scene.voyages.some((v) => v.b && !v.dim));
+  useEffect(() => {
+    if (flowing) phase.set(withRepeat(withTiming(MOTION_CYCLES, { duration: MOTION_MS * MOTION_CYCLES, easing: Easing.linear }), -1, false));
+    else {
+      cancelAnimation(phase);
+      phase.set(0);
+    }
+    return () => cancelAnimation(phase);
+  }, [flowing, phase]);
+  const motion = useDerivedValue(() => {
+    const rec = Skia.PictureRecorder();
+    const canvas = rec.beginRecording(Skia.XYWHRect(0, 0, Math.max(1, w), Math.max(1, h)));
+    if (w > 0 && h > 0) {
+      const cam: Camera = { yaw: yaw.get(), tilt: tilt.get(), scale: scale.get(), center: { x: ox.get(), y: oy.get(), z: oz.get() }, cx: cx.get(), cy: cy.get() };
+      drawMotion(canvas, scene, cam, phase.get(), flowing);
+    }
+    return rec.finishRecordingAsPicture();
+  }, [scene, w, h, flowing]);
 
   const camNow = useCallback(
     (): Camera => ({ yaw: yaw.get(), tilt: tilt.get(), scale: scale.get(), center: { x: ox.get(), y: oy.get(), z: oz.get() }, cx: cx.get(), cy: cy.get() }),
@@ -366,6 +401,7 @@ export default function StarMapCanvas(props: StarMapProps) {
           scaleBarLy: barLy.get(),
           viewportPrefix,
           milkyWay,
+          scutText,
           hits: drawn,
         });
         rec.finishRecordingAsPicture();
@@ -436,7 +472,7 @@ export default function StarMapCanvas(props: StarMapProps) {
       }
       return null;
     },
-    [scene, camNow, view, insets.left, insets.top, inner, state.places, fonts, w, h, drops, scale, fitScale, chrome, scaleBar, barLy, viewportPrefix, milkyWay],
+    [scene, camNow, view, insets.left, insets.top, inner, state.places, fonts, w, h, drops, scale, fitScale, chrome, scaleBar, barLy, viewportPrefix, milkyWay, scutText],
   );
 
   const onTap = useCallback(
@@ -581,6 +617,7 @@ export default function StarMapCanvas(props: StarMapProps) {
           {w > 0 && h > 0 ? (
             <Canvas style={{ width: w, height: h }}>
               <Picture picture={picture} />
+              <Picture picture={motion} />
             </Canvas>
           ) : null}
         </View>

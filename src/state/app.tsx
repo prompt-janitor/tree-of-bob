@@ -45,6 +45,8 @@ interface Saved {
   /** Systems map: two fingers only zoom (the centre stays where it was put). */
   mapLock?: boolean;
   mapTone?: MapTone;
+  /** Systems map, wide screens: the key beside the map is shown. */
+  mapLegend?: boolean;
 }
 
 /** Default width of the Bob drawer on iPad and wide web (points). */
@@ -87,6 +89,9 @@ interface AppState {
   /** The Systems map's background (dark by default, in either app theme). */
   mapTone: MapTone;
   setMapTone: (t: MapTone) => void;
+  /** Systems map, wide screens: the key beside the map is shown (the Key button toggles it).*/
+  mapLegend: boolean;
+  setMapLegend: (open: boolean) => void;
   /** iPhone: the floating nav shrinks while the content scrolls down. */
   navCompact: boolean;
   setNavCompact: (c: boolean) => void;
@@ -112,6 +117,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Touch devices start locked: a pinch there always moves the fingers' midpoint a little.
   const [mapLock, setMapLock] = useState(Platform.OS !== 'web');
   const [mapTone, setMapTone] = useState<MapTone>('dark');
+  const [mapLegend, setMapLegend] = useState(true);
 
   useEffect(() => {
     AsyncStorage.getItem(STORE_KEY)
@@ -125,6 +131,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (saved.mapLayers) setMapLayers(readLayers(saved.mapLayers));
         if (typeof saved.mapLock === 'boolean') setMapLock(saved.mapLock);
         if (saved.mapTone === 'light' || saved.mapTone === 'dark') setMapTone(saved.mapTone);
+        if (typeof saved.mapLegend === 'boolean') setMapLegend(saved.mapLegend);
       })
       .catch(() => {})
       .finally(() => setHydrated(true));
@@ -132,9 +139,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!hydrated) return;
-    const saved: Saved = { progress, theme: themePref, zoom, logScope, drawerWidth, mapLayers, mapLock, mapTone };
+    const saved: Saved = { progress, theme: themePref, zoom, logScope, drawerWidth, mapLayers, mapLock, mapTone, mapLegend };
     AsyncStorage.setItem(STORE_KEY, JSON.stringify(saved)).catch(() => {});
-  }, [hydrated, progress, themePref, zoom, logScope, drawerWidth, mapLayers, mapLock, mapTone]);
+  }, [hydrated, progress, themePref, zoom, logScope, drawerWidth, mapLayers, mapLock, mapTone, mapLegend]);
 
   const view = useMemo(() => computeView(model, progress), [progress]);
 
@@ -215,6 +222,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMapLock,
     mapTone,
     setMapTone,
+    mapLegend,
+    setMapLegend,
     navCompact,
     setNavCompact,
     hydrated,

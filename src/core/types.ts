@@ -22,6 +22,27 @@ export interface Chapter extends Provenance {
   place?: string | null;
   /** Decimal story year, e.g. 2171.542. */
   year?: number | null;
+  /** systems[].id where the chapter's action is set; null: in transit or interstellar space. Absent: read from `place`. */
+  system?: string | null;
+  /** systems[].id where the narrator physically is, only when it differs from `system` (he calls in from there).
+   * null: he is there. Absent: not recorded. */
+  narratorFrom?: string | null;
+  /** How the narrator takes part when he calls in. */
+  narratorVia?: RemoteVia | null;
+  /** Others who take part (the narrator is not repeated). Shown with the chapter about to be read, limited to people
+   * already met and active on the chapter date, each place named only once met (the user's choice, CLAUDE.md rule 1). */
+  cast?: CastRecord[] | null;
+}
+
+/** How someone takes part in a chapter set somewhere else: in VR, through an android, or over comms. */
+export type RemoteVia = 'vr' | 'android' | 'comms';
+
+export interface CastRecord {
+  /** bobs[].id or others[].id */
+  id: string;
+  /** systems[].id he is in; equal to the chapter's system when he is there. null: not given. */
+  from?: string | null;
+  via?: 'present' | RemoteVia | null;
 }
 
 export interface Book {
@@ -127,6 +148,26 @@ export interface SystemRecord extends Provenance {
   near?: string | null;
   offsetLy?: number | null;
   description?: string | null;
+  /** The books do not place it: pos is a best guess. */
+  guess?: SystemGuess | null;
+  /** The same place as another system, under an earlier name (kept so earlier chapters read as printed). */
+  alias?: { of: string; reason?: string | null } | null;
+}
+
+/** How a best-guess position was chosen. Free text here may cite later chapters, so only candidate and the
+ * distances are shown. */
+export interface SystemGuess {
+  basis?: string | null;
+  method?: string | null;
+  /** The catalogue star chosen, or null for a point in a region. */
+  candidate?: string | null;
+  candidatesInRegion?: number | null;
+  /** 95% range of the distance from Sol (ly). */
+  distSolLy95?: [number, number] | null;
+  anchor?: string | null;
+  distAnchorLy95?: [number, number] | null;
+  distSolLy?: number | null;
+  research?: string | null;
 }
 
 /** A group that can hold systems: humans, a human faction or nation, or another species or AI. */
@@ -173,7 +214,14 @@ export interface Settings {
   defaultChapter?: number;
   recentYears?: number;
   povAliases?: Record<string, string>;
+  /** SCUT's working range round a system (one figure, or several as it changes over the series). */
+  scutRange?: ScutRange | ScutRange[];
   [key: string]: unknown;
+}
+
+export interface ScutRange extends Provenance {
+  ly: number;
+  reveal: Reveal;
 }
 
 export interface TreeData {
