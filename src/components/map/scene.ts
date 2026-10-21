@@ -19,6 +19,7 @@ import {
   yearText,
   type LayerMode,
   type ScutMode,
+  type WormholeNetwork,
   type MapPresence,
   type MapState,
   type ProgressView,
@@ -30,12 +31,12 @@ import {
 import raw from '@/data/sky.json';
 import type { Palette } from '@/theme/tokens';
 
+import { BLOBS, DISC_RADIUS_PC, GALACTIC_CENTRE, makeStars, type GalaxyScene } from './galaxy-model';
 import type { MapHit, MapLevel } from './types';
 
-/** Galactic centre (Sagittarius A*), parsecs from Sol along +x. Schematic disc only; not a labelled place. */
-export const GALACTIC_CENTRE: Vec3 = { x: 8178, y: 0, z: 0 };
-/** Radius of the schematic Milky Way disc, parsecs (about 15 kpc). */
-export const DISC_RADIUS_PC = 15000;
+export { DISC_RADIUS_PC, GALACTIC_CENTRE };
+/** The Milky Way and the Magellanic Clouds (galaxy level): the same at every reading position. */
+const GALAXY: GalaxyScene = { stars: makeStars(), blobs: BLOBS };
 const SOL: Vec3 = { x: 0, y: 0, z: 0 };
 
 /** Radius of the galaxy locator (a small Milky Way turning with the map), points. A tap on it recentres the map. */
@@ -130,8 +131,16 @@ export interface SceneNode {
   presence: MapPresence['kind'][];
   /** On the SCUT network on the map date. */
   scut: boolean;
+  /** Wormhole gates here (revealed links drawn): a flat gate on the floor per network. */
+  gates: WormholeNetwork[];
   /** Its position is a best guess (hollow dashed marker, "?" after the name). */
   guess: boolean;
+}
+
+export interface SceneWormhole {
+  a: Vec3;
+  b: Vec3;
+  network: WormholeNetwork;
 }
 
 export interface SceneVoyage {
@@ -276,16 +285,18 @@ export interface Scene {
   sky: number[];
   /** Background stars, flattened [x, y, z, ...] (local level only). */
   stars: number[];
-  /** Galaxy level: the schematic Milky Way disc on the galactic plane (a world object). Null on the local level.
-   * The floor itself is not in the scene: it is the viewport globe's equator, the horizontal plane through the camera
-   * centre, so it comes from the live camera (see drawScene). */
-  disc: { c: Vec3; r: number } | null;
+  /** The Milky Way and the Magellanic Clouds (world objects; see galaxy-model.ts), on both levels: the drawing fades
+   * them in as the view zooms out (null: not drawn). The floor itself is not in the scene: it is the viewport globe's equator, the horizontal plane through the
+   * camera centre, so it comes from the live camera (see drawScene). */
+  galaxy: GalaxyScene | null;
   nodes: SceneNode[];
   voyages: SceneVoyage[];
   hops: SceneHop[];
   ghosts: SceneGhost[];
   calls: SceneCall[];
   scut: [Vec3, Vec3][];
+  /** Wormhole links, each once (the same route learned twice is drawn once). */
+  wormholes: SceneWormhole[];
   /** The network's pulse: for each possible start (scutRoots of them), each link's hops from it, flattened
    * [root * scut.length + link]. */
   scutHops: number[];
@@ -445,8 +456,9 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
     if (galaxy && pl.local) {
       cluster ??= {
         key: 'sol-neighbourhood', ids: [], p: SOL, puck: false, chapterRing: false, pips: [], more: 0, lost: 0, count: 0,
-        dim: false, empty: false, cluster: true, name: 'Sol neighbourhood', drop: false, namesInLabel: false, presence: [], scut: false, guess: false,
+        dim: false, empty: false, cluster: true, name: 'Sol neighbourhood', drop: false, namesInLabel: false, presence: [], scut: false, guess: false, gates: [],
       };
+      for (const g of pl.gates) if (!cluster.gates.includes(g)) cluster.gates.push(g);
       cluster.puck ||= pov;
       cluster.count += count;
       continue;
@@ -468,6 +480,7 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
       hit.presence.push(...pl.presence.map((x) => x.kind));
       hit.empty = hit.count === 0 && hit.lost === 0 && hit.presence.length === 0 && !(netShown && (hit.scut || pl.scut));
       hit.scut ||= pl.scut;
+      for (const g of pl.gates) if (!hit.gates.includes(g)) hit.gates.push(g);
       const lf = lineFor.get(hit)!;
       lf.people.push(...people);
       lf.pov ||= pov;
@@ -476,7 +489,7 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
       const n: SceneNode = {
         key: pl.id, ids: [pl.id], p: pl.pos, puck: pov, chapterRing: false, pips, more: 0, lost: pl.lost.length, count,
         dim: false, empty: count === 0 && pl.lost.length === 0 && pl.presence.length === 0 && !(netShown && pl.scut), cluster: false, name: pl.id, drop: false, namesInLabel: false, guess: !!pl.guess,
-        presence: pl.presence.map((x) => x.kind), scut: pl.scut,
+        presence: pl.presence.map((x) => x.kind), scut: pl.scut, gates: [...pl.gates],
       };
       nodes.push(n);
       lineFor.set(n, { people, pov, presence: [...pl.presence] });
@@ -623,6 +636,19 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
     const b = at(c.to);
     if (!a || !b || same(a, b)) continue;
     calls.push({ who: c.who, colour: colour(c.who), a, b, pov: c.pov, dim: dimOf(c.who) });
+  }
+
+  // --- Wormhole links (hidden in lineage mode): low arcs between gates. On the galaxy level a link inside the Sol
+  // neighbourhood has no length and is left out; on the local level a link with a far end is left out.
+  const wormholes: SceneWormhole[] = [];
+  if (!sel) {
+    for (const wh of state.wormholes) {
+      const a = at(wh.a);
+      const b = at(wh.b);
+      if (!a || !b || same(a, b)) continue;
+      if (wormholes.some((x) => (same(x.a, a) && same(x.b, b)) || (same(x.a, b) && same(x.b, a)))) continue;
+      wormholes.push({ a, b, network: wh.network });
+    }
   }
 
   // --- SCUT links (hidden in lineage mode). For the network's pulse, each link's hop count from every system on
@@ -898,13 +924,14 @@ export function buildScene({ view, state, level, selectedBob, callout, colourOf,
     level,
     sky: galaxy ? [] : SKY,
     stars,
-    disc: galaxy ? { c: GALACTIC_CENTRE, r: DISC_RADIUS_PC } : null,
+    galaxy: GALAXY,
     nodes,
     voyages,
     hops,
     ghosts,
     calls,
     scut,
+    wormholes,
     scutHops,
     scutRoots,
     scutHull,

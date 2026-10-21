@@ -152,6 +152,28 @@ export interface SystemRecord extends Provenance {
   guess?: SystemGuess | null;
   /** The same place as another system, under an earlier name (kept so earlier chapters read as printed). */
   alias?: { of: string; reason?: string | null } | null;
+  /** A wormhole gate here belongs to this network. Shown only once one of its links is revealed. */
+  network?: WormholeNetwork | null;
+  /** For places that no chapter or record names before they appear on the map (wormhole hubs): the first chapter
+   * where the reader learns the place exists. Absent: known from records and headings as usual. */
+  reveal?: Reveal | null;
+}
+
+/** pgf: the Pan-Galactic Federation's network; bob: wormholes the Bobs made; other: other aliens' portals. */
+export type WormholeNetwork = 'pgf' | 'bob' | 'other';
+
+/** A wormhole link between two systems. Its reveal is the first chapter where the reader learns it exists. */
+export interface WormholeRecord extends Provenance {
+  a: string;
+  b: string;
+  network: WormholeNetwork;
+  /** When it was made or opened (decimal year), if known. */
+  built?: number | null;
+  reveal: Reveal;
+  /** Named hubs on the route, in order from a to b. The map splits the link at each once its reveal has passed. */
+  through?: { id: string; reveal: Reveal }[] | null;
+  /** Maintainer note; may cite later chapters, so never shown. */
+  note?: string | null;
 }
 
 /** How a best-guess position was chosen. Free text here may cite later chapters, so only candidate and the
@@ -237,6 +259,7 @@ export interface TreeData {
   stars?: StarRecord[];
   groups?: GroupRecord[];
   presence?: PresenceRecord[];
+  wormholes?: WormholeRecord[];
 }
 
 export type Status = 'active' | 'lost' | 'missing';

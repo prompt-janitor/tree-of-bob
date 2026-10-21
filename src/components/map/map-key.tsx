@@ -127,6 +127,24 @@ function TrunkSample({ p }: { p: Palette }) {
   );
 }
 
+/** A wormhole network link: a low arc between flat gates, styled as on the map. */
+function NetSample({ p, kind }: { p: { ink: string }; kind: 'pgf' | 'bob' | 'other' }) {
+  const gate = (cx: number) => (
+    <>
+      {kind === 'bob' ? <Ellipse cx={cx} cy={18} rx={7} ry={4} fill={p.ink} fillOpacity={0.2} /> : null}
+      <Ellipse cx={cx} cy={18} rx={7} ry={4} fill="none" stroke={p.ink} strokeOpacity={0.7} strokeWidth={1} />
+      {kind === 'other' ? <Ellipse cx={cx} cy={18} rx={10.5} ry={6} fill="none" stroke={p.ink} strokeOpacity={0.55} strokeWidth={1} /> : null}
+    </>
+  );
+  return (
+    <Svg width={60} height={26}>
+      <Path d="M11 18 Q30 9 49 18" fill="none" stroke={p.ink} strokeOpacity={kind === 'bob' ? 0.6 : 0.42} strokeWidth={kind === 'bob' ? 1.25 : 1} />
+      {gate(11)}
+      {gate(49)}
+    </Svg>
+  );
+}
+
 export function mapKeyItems(k: MapKeyInput): MapKeyItem[] {
   const { view, states, layers, palette: p, colour: c, puckColour } = k;
   const any = (f: (s: MapState) => boolean) => states.some(f);
@@ -134,6 +152,7 @@ export function mapKeyItems(k: MapKeyInput): MapKeyItem[] {
   const system = view.chapter.system;
   const hopsVia = (via: 'wormhole' | 'transmitted') => any((s) => s.hops.some((h) => h.via === via) || s.ghosts.some((g) => g.via === via));
   const volume = layers.scut === 'volume' && view.scut.length > 0;
+  const netOf = (n: 'pgf' | 'bob' | 'other') => any((s) => s.wormholes.some((w) => w.network === n));
   return [
     { id: 'puck', label: 'Narrator', detail: 'Where he is on the chapter date. Drag across to turn the map, up or down to tilt.', sample: <NarratorPuck colour={puckColour} size={32} />, beside: true, show: !!narrator && any((s) => s.places.some((x) => x.narrator) || s.voyages.some((v) => v.who === narrator)) },
     { id: 'globe', label: 'Floor and globe', detail: 'The globe turns with the map. The grey floor is level with the centre of view; its rings are one scale bar apart. A line drops from each star to the floor, dashed if the star is below it.', sample: <Svg width={60} height={44}><Rect x={0} y={0} width={60} height={44} fill={p.ink} fillOpacity={0.03} /><Ellipse cx={30} cy={22} rx={20} ry={11} fill={p.ink} fillOpacity={0.06} /><Path d="M0 22h10M50 22h10M30 0v11M30 33v11" stroke={p.ink} strokeOpacity={0.12} strokeWidth={0.75} /><Path d="M10 22h40M30 11v22" stroke={p.ink} strokeOpacity={0.22} strokeWidth={0.75} /><Ellipse cx={30} cy={22} rx={10} ry={5.5} fill="none" stroke={p.ink} strokeOpacity={0.25} strokeWidth={0.75} /><Ellipse cx={30} cy={22} rx={28} ry={15.5} fill="none" stroke={p.ink} strokeOpacity={0.14} strokeWidth={0.75} /><Circle cx={30} cy={22} r={20} fill="none" stroke={p.ink} strokeOpacity={0.16} strokeWidth={0.75} /><Path d="M10 22a20 11 0 0 0 40 0" fill="none" stroke={p.ink} strokeOpacity={0.3} strokeWidth={0.75} /><Path d="M10 22a20 11 0 0 1 40 0" fill="none" stroke={p.ink} strokeOpacity={0.18} strokeWidth={0.75} strokeDasharray="2 2.5" /><Line x1={42} x2={42} y1={9} y2={26} stroke={p.ink} strokeOpacity={0.45} strokeWidth={1} /><Ellipse cx={42} cy={26} rx={3} ry={1.4} fill="none" stroke={p.ink} strokeOpacity={0.45} strokeWidth={1} /><Circle cx={42} cy={9} r={3.25} fill={p.ink} /><Circle cx={30} cy={22} r={3.25} fill={p.ink} /></Svg>, beside: false, show: true },
@@ -154,6 +173,9 @@ export function mapKeyItems(k: MapKeyInput): MapKeyItem[] {
     { id: 'noarrival', label: 'Arrival not known yet', detail: 'Line with arrows, no dot. Labelled with time travelled so far.', sample: <Svg width={60} height={14}><Line x1={4} x2={56} y1={7} y2={7} stroke={c} strokeWidth={2} strokeLinecap="round" /><Path d="M20 3l4.5 4-4.5 4M40 3l4.5 4-4.5 4" stroke={c} strokeWidth={1.75} fill="none" strokeLinecap="round" /></Svg>, beside: true, show: any((s) => s.voyages.some((y) => y.to != null && y.fraction == null)) },
     { id: 'nodest', label: 'Destination not given', detail: 'Short arrow leaving the system he set out from.', sample: <Svg width={60} height={14}><Circle cx={10} cy={7} r={4} fill="none" stroke={p.ink} strokeWidth={1.5} /><Line x1={16} x2={34} y1={7} y2={7} stroke={c} strokeWidth={2} strokeLinecap="round" /><Path d="M40 7l-6.5 -3.5v7Z" fill={c} /></Svg>, beside: true, show: any((s) => s.voyages.some((y) => y.to == null)) },
     { id: 'wormhole', label: 'Wormhole hop', detail: 'Thin arc between two gate rings. Instant, so no dot.', sample: <Svg width={60} height={24}><Path d="M10 18 Q30 0 50 18" fill="none" stroke={c} strokeWidth={1.5} /><Ellipse cx={10} cy={18} rx={8} ry={4.5} fill="none" stroke={p.ink} strokeWidth={1.25} /><Ellipse cx={50} cy={18} rx={8} ry={4.5} fill="none" stroke={p.ink} strokeWidth={1.25} /></Svg>, beside: true, show: hopsVia('wormhole') },
+    { id: 'net-pgf', label: 'Wormhole network', detail: 'Low arc between gates: a known wormhole link.', sample: <NetSample p={p} kind="pgf" />, beside: true, show: netOf('pgf') },
+    { id: 'net-bob', label: 'Bob-made wormhole', detail: 'Filled gate and a stronger arc: a wormhole the Bobs made.', sample: <NetSample p={p} kind="bob" />, beside: true, show: netOf('bob') },
+    { id: 'net-other', label: 'Other portal', detail: 'Double gate: a portal that is not part of the wormhole network.', sample: <NetSample p={p} kind="other" />, beside: true, show: netOf('other') },
     { id: 'transmitted', label: 'Transmitted', detail: 'Dotted arc: his matrix was sent, not flown.', sample: <Svg width={60} height={24}><Path d="M10 18 Q30 0 50 18" fill="none" stroke={p.ink} strokeWidth={1.5} strokeDasharray="1 3" strokeLinecap="round" /></Svg>, beside: true, show: hopsVia('transmitted') },
     { id: 'ghost', label: 'Known later', detail: `In a flashback chapter, faint double lines ending in a hollow ring show what you know happens by NOW (${monthYear(view.latest)}). Tap one for details.`, sample: <Svg width={60} height={14}><Line x1={4} x2={46} y1={5.5} y2={5.5} stroke={c} strokeOpacity={0.45} strokeWidth={0.75} /><Line x1={4} x2={46} y1={8.5} y2={8.5} stroke={c} strokeOpacity={0.45} strokeWidth={0.75} /><Circle cx={51} cy={7} r={4} fill="none" stroke={c} strokeOpacity={0.6} strokeWidth={1.5} /></Svg>, beside: true, show: any((s) => s.ghosts.length > 0) },
     { id: 'other', label: 'Other replicant', detail: 'Not a Bob. Hollow ink marker and outlined line, never a Bob colour.', sample: <Svg width={60} height={14}><Line x1={4} x2={40} y1={7} y2={7} stroke={p.ink} strokeWidth={3.5} /><Line x1={4} x2={40} y1={7} y2={7} stroke={p.bg} strokeWidth={1.5} /><Path d="M19 3l4.5 4-4.5 4" stroke={p.ink} strokeWidth={1.5} fill="none" strokeLinecap="round" /><Rect x={44} y={2} width={10} height={10} fill={p.bg} stroke={p.ink} strokeWidth={1.5} /></Svg>, beside: true, show: any((s) => s.places.some((x) => x.others.length > 0) || s.voyages.some((y) => y.isOther)) },

@@ -35,6 +35,8 @@ export interface StarMapProps {
   /** A tap on something: the canvas has already moved the pivot to it. anchored false: it is not drawn on this level
    * (a track leading off it), so the pivot did not move and a callout must not point at the centre. */
   onPress: (hit: MapHit, anchored: boolean) => void;
+  /** The reader zoomed across the switch between the levels: show this level (the camera stays where it is). */
+  onZoomLevel?: (level: MapLevel) => void;
   /** A pivot request whose target is not drawn on this level: the camera did not move. */
   onUnanchored?: (target: MapHit) => void;
   /** A tap that hits nothing. */

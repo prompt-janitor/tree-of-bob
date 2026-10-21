@@ -7,6 +7,7 @@ export interface ValidationResult {
 }
 
 const CONFIDENCE = ['high', 'medium', 'low'];
+const NETWORKS = ['pgf', 'bob', 'other'];
 
 export function validateData(data: TreeData): ValidationResult {
   const errors: string[] = [];
@@ -96,6 +97,8 @@ export function validateData(data: TreeData): ValidationResult {
     if ((s.kind === 'star' || s.kind === 'far') && !s.pos) err(`${label}: a ${s.kind} needs "pos".`);
     if (s.pos && ![s.pos.x, s.pos.y, s.pos.z].every((n) => typeof n === 'number' && Number.isFinite(n))) err(`${label}: pos needs numeric x, y, z.`);
     if (s.kind === 'near' && !s.near) err(`${label}: kind "near" needs "near".`);
+    if (s.network != null && !NETWORKS.includes(s.network)) err(`${label}: network must be "pgf", "bob" or "other".`);
+    if (s.reveal != null) checkReveal(s.reveal, label);
     checkProv(s, label);
   });
   // Chapter settings and cast (all optional): known systems and people, and nobody in a chapter before he is met.
@@ -176,6 +179,31 @@ export function validateData(data: TreeData): ValidationResult {
     checkProv(p, label);
     if (g && ok && exists(g.reveal) && rk(p.reveal) < rk(g.reveal)) err(`${label}: revealed before the group itself.`);
     if (p.ended && checkReveal(p.ended.reveal, `${label} ended`) && ok && rk(p.ended.reveal) < rk(p.reveal)) err(`${label}: ends before it is revealed.`);
+  });
+  // Wormhole links: known ends, and never revealed before a place it joins (an end with its own reveal).
+  const sysById = new Map((data.systems ?? []).map((s) => [s.id, s]));
+  (data.wormholes ?? []).forEach((w, i) => {
+    const label = `Wormhole #${i + 1} (${w.a} – ${w.b})`;
+    if (!NETWORKS.includes(w.network)) err(`${label}: network must be "pgf", "bob" or "other".`);
+    if (w.a === w.b) err(`${label}: joins a system to itself.`);
+    const ok = checkReveal(w.reveal, label);
+    checkProv(w, label);
+    if (w.built != null && typeof w.built !== 'number') err(`${label}: "built" must be a year or null.`);
+    for (const end of [w.a, w.b]) {
+      const s = sysById.get(end);
+      if (!s) err(`${label}: unknown system "${end}".`);
+      else if (ok && s.reveal && exists(s.reveal) && rk(w.reveal) < rk(s.reveal)) err(`${label}: revealed before "${end}".`);
+    }
+    if (w.through != null && !Array.isArray(w.through)) err(`${label}: "through" must be a list.`);
+    for (const [j, th] of (Array.isArray(w.through) ? w.through : []).entries()) {
+      const tl = `${label} through #${j + 1} (${th?.id})`;
+      const s = th?.id ? sysById.get(th.id) : undefined;
+      if (!s) err(`${tl}: unknown system.`);
+      if (!checkReveal(th?.reveal, tl)) continue;
+      if (ok && rk(th.reveal) < rk(w.reveal)) err(`${tl}: revealed before the link.`);
+      if (s?.reveal && exists(s.reveal) && rk(th.reveal) < rk(s.reveal)) err(`${tl}: revealed before the system itself.`);
+      if (th.id === w.a || th.id === w.b) err(`${tl}: is an end of the link.`);
+    }
   });
   return { errors, warnings };
 }

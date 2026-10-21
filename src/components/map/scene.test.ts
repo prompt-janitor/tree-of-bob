@@ -3,9 +3,10 @@
 import { describe, expect, it } from 'vitest';
 
 import raw from '@/data/tree-of-bob.json';
-import { buildModel, computeView, LY_PER_PC, mapState, type ProgressView, type TreeData } from '@/core';
+import { buildModel, computeView, LY_PER_PC, mapState, toGalactic, type ProgressView, type TreeData } from '@/core';
 import type { Palette } from '@/theme/tokens';
 
+import { DISC_RADIUS_PC, GALACTIC_CENTRE, LMC_CENTRE, makeStars, SMC_CENTRE } from './galaxy-model';
 import { buildScene, convexHull2d, lyLabel, roundedHull, scaleBarFor, viewportDiameter } from './scene';
 
 const palette = { bg: '#fff', ink: '#000', ink2: '#444', ink3: '#888', line: '#ccc', scheme: 'light' } as unknown as Palette;
@@ -107,11 +108,31 @@ describe('buildScene', () => {
     expect(mine.length).toBe(1);
     expect(mine[0].colour).toBe('#ff0000');
   });
-  it('galaxy level: the schematic disc lies on the galactic plane', () => {
-    const s = scene(at(5, 16), 'galaxy');
-    expect(s.disc).not.toBeNull();
-    expect(s.disc!.c.z).toBe(0);
-    expect(scene(at(5, 16)).disc).toBeNull();
+  it('the Milky Way is on both levels (faded in by zoom), the same at every reading position', () => {
+    const early = scene(at(5, 16), 'galaxy');
+    expect(early.galaxy).not.toBeNull();
+    expect(scene(at(5, 16)).galaxy).toEqual(early.galaxy);
+    // Scenery only: nothing in it depends on progress, so it can never point at a place still to come.
+    expect(scene(at(6, 1), 'galaxy').galaxy).toEqual(early.galaxy);
+  });
+  it('galaxy model: a thin disc round the centre, and the Magellanic Clouds where the data puts the LMC', () => {
+    const st = makeStars();
+    expect(makeStars()).toEqual(st);
+    let inDisc = 0;
+    let thin = 0;
+    for (let i = 0; i < st.length; i += 4) {
+      const r = Math.hypot(st[i] - GALACTIC_CENTRE.x, st[i + 1] - GALACTIC_CENTRE.y);
+      if (r < DISC_RADIUS_PC + 1000) {
+        inDisc++;
+        if (Math.abs(st[i + 2]) < 1000) thin++;
+      }
+    }
+    expect(thin / inDisc).toBeGreaterThan(0.8);
+    const lmc = model.data.systems?.find((x) => x.id === 'Large Magellanic Cloud');
+    expect(lmc?.pos).toBeTruthy();
+    const g = toGalactic(lmc!.pos!);
+    expect(Math.hypot(g.x - LMC_CENTRE.x, g.y - LMC_CENTRE.y, g.z - LMC_CENTRE.z)).toBeLessThan(3000);
+    expect(Math.hypot(SMC_CENTRE.x, SMC_CENTRE.y, SMC_CENTRE.z)).toBeGreaterThan(55000);
   });
 });
 

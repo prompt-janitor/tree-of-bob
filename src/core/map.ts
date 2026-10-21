@@ -1,7 +1,7 @@
 // The Systems map: where everyone is on a given story date, built only from a ProgressView (so nothing past the
 // reveal gate or NOW can appear), plus the geometry to draw it.
 import { rank, revealYear, type Model } from './model';
-import type { MoveRecord, PresenceRecord, RemoteVia, Reveal, ScutRange, SystemRecord, Via } from './types';
+import type { MoveRecord, PresenceRecord, RemoteVia, Reveal, ScutRange, SystemRecord, Via, WormholeNetwork } from './types';
 import { fateStatus, knownPlaces, locAt, type ProgressView } from './view';
 
 export interface Vec3 {
@@ -118,6 +118,15 @@ export interface MapPlace {
   guess: PlaceGuess | null;
   /** Colonies, outposts and held territory here on this date, as far as the reader knows. */
   presence: MapPresence[];
+  /** Wormhole networks with a revealed gate here on this date (one of its links is revealed). */
+  gates: WormholeNetwork[];
+}
+
+/** A revealed wormhole link that exists on the map date. */
+export interface MapWormhole {
+  a: string;
+  b: string;
+  network: WormholeNetwork;
 }
 
 export interface MapPresence {
@@ -199,6 +208,8 @@ export interface MapState {
   hops: MapHop[];
   /** SCUT links between places, a minimum spanning tree over places with someone on SCUT. */
   scutLinks: [string, string][];
+  /** Revealed wormhole links built by the map date (or with no known date). */
+  wormholes: MapWormhole[];
   /** Flashback chapters only: what the reader already knows happens between the map date and NOW. */
   ghosts: GhostTrail[];
   /** Calling in: the narrator's link to where the chapter is set, and links for the chapter just read. */
@@ -338,7 +349,7 @@ export function mapState(view: ProgressView, t: number): MapState {
       const ps = pos.get(id) ?? null;
       p = {
         id, pos: ps, kind: recs.get(id)?.kind ?? 'unknown', local: ps ? distanceLy(ps) <= LOCAL_RADIUS_LY : true,
-        bobs: [], others: [], lost: [], narrator: false, scut: false, presence: [], guess: placeGuess(model, id),
+        bobs: [], others: [], lost: [], narrator: false, scut: false, presence: [], gates: [], guess: placeGuess(model, id),
       };
       places.set(id, p);
     }
@@ -421,11 +432,30 @@ export function mapState(view: ProgressView, t: number): MapState {
     placeOf(pr.system).presence.push({ group: g.id, groupLabel: g.label, groupShort: g.short || g.label, human: g.human, kind: pr.kind, name: pr.label ?? null });
   }
 
+  // Wormhole links: revealed, and made by the map date when the books say when.
+  const wormholes: MapWormhole[] = [];
+  // A link through named hubs is split at each one the reader has met, so a chain reads as a line of hubs.
+  const linked = new Set<string>();
+  for (const w of view.wormholes) {
+    if (typeof w.built === 'number' && w.built > t + EPS) continue;
+    const stops = [w.a, ...(w.through ?? []).filter((x) => rank(x.reveal) <= view.P).map((x) => x.id), w.b];
+    for (let i = 0; i + 1 < stops.length; i++) {
+      const key = [stops[i], stops[i + 1]].sort().join('\u0000');
+      if (linked.has(key)) continue;
+      linked.add(key);
+      wormholes.push({ a: stops[i], b: stops[i + 1], network: w.network });
+    }
+    for (const end of stops) {
+      const p = placeOf(end);
+      if (!p.gates.includes(w.network)) p.gates.push(w.network);
+    }
+  }
+
   const list = [...places.values()].sort((a, b) => Number(b.narrator) - Number(a.narrator) || b.bobs.length - a.bobs.length || a.id.localeCompare(b.id));
   const scutLinks = minimumSpanningTree(list.filter((p) => p.scut).map((p) => p.id), pos);
   const focus = list.find((p) => p.narrator)?.id ?? null;
   const flashback = view.chapter.flashbackYear != null && Math.abs(t - (view.chapter.time ?? t)) < EPS;
-  return { time: t, focus, places: list, voyages, hops, scutLinks, ghosts: flashback ? ghostTrails(view, t) : [], calls: mapCalls(view, t, places, voyages) };
+  return { time: t, focus, places: list, voyages, hops, scutLinks, wormholes, ghosts: flashback ? ghostTrails(view, t) : [], calls: mapCalls(view, t, places, voyages) };
 }
 
 /** Calling-in links on the map date: each from a place where the caller is drawn to a known place. */
@@ -487,11 +517,13 @@ export interface MapLayers {
   presence: LayerMode;
   /** The SCUT network: show its links (every system on it stays on the map), its volume as well, or neither. */
   scut: ScutMode;
+  /** Wormhole links and gates (chapter: links touching the chapter's places); both ends of a link drawn stay. */
+  wormholes: LayerMode;
 }
 
-export const LAYER_KEYS = ['bobs', 'others', 'journeys', 'history', 'names', 'empty', 'presence', 'scut'] as const;
+export const LAYER_KEYS = ['bobs', 'others', 'journeys', 'history', 'names', 'empty', 'presence', 'scut', 'wormholes'] as const;
 
-export const DEFAULT_LAYERS: MapLayers = { bobs: 'chapter', others: 'chapter', journeys: 'chapter', history: 'chapter', names: 'show', empty: 'chapter', presence: 'show', scut: 'show' };
+export const DEFAULT_LAYERS: MapLayers = { bobs: 'chapter', others: 'chapter', journeys: 'chapter', history: 'chapter', names: 'show', empty: 'chapter', presence: 'show', scut: 'show', wormholes: 'show' };
 
 /** Saved layer settings, with anything unknown (an older format) replaced by the default. */
 export function readLayers(saved: unknown): MapLayers {
@@ -547,6 +579,10 @@ export function filterMapState(view: ProgressView, state: MapState, layers: MapL
   const calls = state.calls.filter((c) => c.pov || keepWho(c.who, c.isOther));
   for (const c of calls) for (const p of [c.from, c.to]) if (p) needed.add(p);
   if (net) for (const pl of state.places) if (pl.scut) needed.add(pl.id);
+  // Wormhole links drawn keep both their ends.
+  const wormholes = state.wormholes.filter((w) => pass(layers.wormholes, chapterAt.has(w.a) || chapterAt.has(w.b)));
+  for (const w of wormholes) needed.add(w.a).add(w.b);
+  const gated = new Set(wormholes.flatMap((w) => [w.a, w.b]));
   const places: MapPlace[] = [];
   for (const pl of state.places) {
     const bobs = pl.bobs.filter((id) => keepWho(id, false));
@@ -557,7 +593,7 @@ export function filterMapState(view: ProgressView, state: MapState, layers: MapL
     const presence = pass(layers.presence, inChapter) ? pl.presence : [];
     const keep = needed.has(pl.id) || occupied || presence.length > 0 || pass(layers.empty, chapterAt.has(pl.id));
     if (!keep) continue;
-    places.push({ ...pl, bobs, others, lost, presence });
+    places.push({ ...pl, bobs, others, lost, presence, gates: gated.has(pl.id) ? pl.gates : [] });
   }
   const placeIds = new Set(places.map((pl) => pl.id));
   const who = new Set(places.flatMap((pl) => [...pl.bobs, ...pl.others]));
@@ -567,6 +603,7 @@ export function filterMapState(view: ProgressView, state: MapState, layers: MapL
     voyages,
     hops: state.hops.filter((hp) => who.has(hp.who)),
     scutLinks: layers.scut === 'hide' ? [] : state.scutLinks.filter(([a, b]) => placeIds.has(a) && placeIds.has(b)),
+    wormholes,
     ghosts: state.ghosts.filter((g) => keepWho(g.who, g.isOther)),
     calls: calls.filter((c) => who.has(c.who) || (c.from === null && voyages.some((v) => v.who === c.who))),
   };

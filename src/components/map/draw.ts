@@ -5,10 +5,11 @@
 // camera), the SCUT network's shade, drop lines and feet,
 // travel history, then what is in the air (SCUT, calling in, ghosts, voyages, hops), places, the narrator's puck, the scale bar,
 // labels, and edge markers for occupied places off screen.
-import { BlendMode, FillType, FilterMode, MipmapMode, PaintStyle, PointMode, Skia, StrokeCap, TileMode, VertexMode, type SkCanvas, type SkImage, type SkFont, type SkPaint, type SkPathEffect } from '@shopify/react-native-skia';
+import { BlendMode, ClipOp, FillType, FilterMode, MipmapMode, PaintStyle, PointMode, Skia, StrokeCap, TileMode, VertexMode, type SkCanvas, type SkImage, type SkFont, type SkPaint, type SkPathEffect } from '@shopify/react-native-skia';
 
 import type { Camera, Vec3 } from '@/core';
 
+import { drawDiscTexture, drawGalaxy } from './galaxy-draw';
 import { flashGlow, GLINT_GAP, GLINT_LEN, HOP_DELAY, RIPPLES_PER_CYCLE } from './motion';
 import { COMPASS_R, compassAt, convexHull2d, DIM, GALACTIC_CENTRE, PIP_GAP, lyLabel, pipOffset, roundedHull, scaleBarFor, viewportDiameter, type Font, type LabelLine, type Scene, type SceneNode } from './scene';
 
@@ -47,6 +48,8 @@ export interface DrawOptions {
   /** Gaia's all-sky map (greyscale, galactic longitude +180 to -180 left to right, latitude +40 to -40 top to bottom),
    * once loaded. */
   milkyWay?: SkImage | null;
+  /** The face-on Milky Way (greyscale, galaxy-disc.jpg), once loaded. */
+  galaxyDisc?: SkImage | null;
   /** SCUT layer shown: the line under the scale bar, longest first (the first that fits is drawn). */
   scutText?: string[] | null;
   /** Filled in for hit testing (taps run the drawing once into a throwaway picture): every pip and every name in a
@@ -107,11 +110,11 @@ export function depthCue(depthPt: number, reach: number): { size: number; alpha:
   return { size: 1 + 0.15 * t, alpha: Math.round((0.85 + 0.15 * t) * 20) / 20 };
 }
 
-/** Control point height of a hop arc: it rises above the plane by a third of its length. */
-export function arcPoint(a: Vec3, b: Vec3, t: number): Vec3 {
+/** A point on a hop arc: its control point rises above the plane by `rise` of its length (a hop: about a third). */
+export function arcPoint(a: Vec3, b: Vec3, t: number, rise = 0.35): Vec3 {
   'worklet';
   const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
-  const lift = len * 0.35;
+  const lift = len * rise;
   const u = 1 - t;
   const mx = (a.x + b.x) / 2;
   const my = (a.y + b.y) / 2;
@@ -249,14 +252,6 @@ export function edgeMarkers(scene: Scene, cam: Camera, box: Box): { x: number; y
 
 /** Radius of the Milky Way's disc, parsecs, drawn COMPASS_R - 4 points across in the locator. */
 const GALAXY_R_PC = 15000;
-/** Spiral arms: logarithmic, 12 degree pitch, from 3 kpc out to the disc's edge; four arms, phased so the Sun (8.2 kpc
- * from the centre) lies between two of them, as it does in the Orion Spur. Schematic shapes, true scale. */
-const ARM_B = Math.tan((12 * Math.PI) / 180);
-const ARM_R0 = 3000;
-const ARM_PHASE = Math.PI * 1.25 - Math.log(8178 / ARM_R0) / ARM_B;
-
-
-
 export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fonts | null, w: number, h: number, opt: DrawOptions) {
   'worklet';
   const T = scene.theme;
@@ -298,6 +293,17 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
   const FOOT_MIN = 6;
   const fontOf = (f: Font): SkFont | null => (fonts ? fonts[f] : null);
   const toneOf = (t: string) => (t === 'ink2' ? T.ink2 : t === 'ink3' ? T.ink3 : T.ink);
+  // One map from a few light years to the whole galaxy: by how far the view reaches (half the map's shorter side, in
+  // light years), the sky fades out from 300 to 1,500 ly and the galaxy's stars fade in from 2,000 to 15,000 ly, its
+  // glow from 5,000 to 30,000 ly (closer in, the view is inside the disc and the glow would only wash the map grey).
+  const reachLy = (Math.min(opt.box.r - opt.box.l, opt.box.b - opt.box.t) / 2 / Math.max(1e-9, cam.scale)) * 3.26156;
+  const fadeLog = (v: number, a: number, b: number) => {
+    const t = Math.max(0, Math.min(1, (Math.log(v) - Math.log(a)) / (Math.log(b) - Math.log(a))));
+    return t * t * (3 - 2 * t);
+  };
+  const skyK = 1 - fadeLog(reachLy, 300, 1500);
+  const galaxyK = fadeLog(reachLy, 2000, 15000);
+  const glowK = fadeLog(reachLy, 5000, 30000);
   /** Where the galactic centre's glow is on screen (labelled last, if there is room), and how strong the band is. */
   let skyLabel: { x: number; y: number; k: number } | null = null;
 
@@ -338,7 +344,7 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
   // (HYG catalogue, to magnitude 5) in their true directions, sized by brightness; near edge-on, the Milky Way band along the plane, brightest towards
   // the galactic centre (with a glow there) and faintest away from it. Looking down on the floor, the plane is at
   // the horizon, off screen.
-  if (scene.level === 'local') {
+  if (scene.level === 'local' && skyK > 0.02) {
     const F = Math.max(w, h) * 0.55;
     const c = Math.cos(cam.yaw);
     const sn = Math.sin(cam.yaw);
@@ -355,7 +361,7 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
       if (fwd < 0.08) return null;
       return { x: scx + (F * rx) / fwd, y: scy - (F * up) / fwd, f: fwd };
     };
-    const starK = T.dark ? 0.6 : 0.45;
+    const starK = (T.dark ? 0.6 : 0.45) * skyK;
     // The Milky Way: a mesh over the sky within 40 degrees of the plane, projected like the stars and drawn under
     // them, textured with Gaia's all-sky map (opt.milkyWay). Its strength is
     // fixed: where it shows depends only on the view, so it lies along the horizon when the map is seen edge-on and
@@ -404,11 +410,11 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
         // and the light map.
         mp.setShader(img.makeShaderOptions(TileMode.Clamp, TileMode.Clamp, FilterMode.Linear, MipmapMode.None));
         mp.setColorFilter(Skia.ColorFilter.MakeCompose(Skia.ColorFilter.MakeBlend(ink, BlendMode.SrcIn), Skia.ColorFilter.MakeLumaColorFilter()));
-        mp.setAlphaf(T.dark ? 0.18 : 0.13);
+        mp.setAlphaf((T.dark ? 0.18 : 0.13) * skyK);
         canvas.drawVertices(Skia.MakeVertices(VertexMode.Triangles, pos, tex, undefined, idx, true), BlendMode.SrcOver, mp);
       }
       const gc = sky(1, 0, 0);
-      if (gc && on(gc.x, gc.y, 0)) skyLabel = { x: gc.x, y: gc.y, k: 1 };
+      if (gc && on(gc.x, gc.y, 0) && skyK > 0.3) skyLabel = { x: gc.x, y: gc.y, k: skyK };
     }
     // Size and strength by apparent brightness: the brightest stars larger and stronger, the faintest barely there.
     // Drawn in SKY_LEVELS batches by brightness (one points call each) instead of one call per star.
@@ -428,14 +434,9 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
     }
   }
 
-  // 1. Galaxy level: the schematic Milky Way disc, a world object on the galactic plane that moves with the stars.
-  const disc = scene.disc;
-  if (disc) {
-    const c = P(disc.c);
-    const r = disc.r * cam.scale;
-    flatOval(c.x, c.y, r, paint(T.ink, T.dark ? 0.07 : 0.06));
-    flatOval(c.x, c.y, r * 0.1, paint(T.ink, T.dark ? 0.11 : 0.09));
-  }
+  // 1. Galaxy level: the Milky Way and the Magellanic Clouds, world objects that move with the places (glows, the
+  // face-on disc, stars; see galaxy-draw.ts). Not drawn for hit testing.
+  if (scene.galaxy && !opt.hits && galaxyK > 0.01) drawGalaxy(canvas, scene.galaxy, opt.galaxyDisc ?? null, cam, T, w, h, galaxyK, glowK);
   // The floor: the horizontal plane (parallel to the galactic plane) through the camera centre, the point the camera
   // orbits. Every height is measured from it: drop lines end on it and lineage tracks lie on it. It is infinite, so it
   // is drawn to the edges of the map: inside the viewport globe (its equatorial disc) a uniform grey, outside it a
@@ -832,6 +833,37 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
     canvas.drawLine(pa.x, pa.y, pb.x, pb.y, core);
   }
 
+  // 5a. The wormhole network: a low arc per link (lower and fainter than a hop, which is someone's trip now), and a
+  // flat gate on the floor at each place it reaches. The gate says the network: PGF a ring, the Bobs' own a filled
+  // ring, other aliens' a double ring. Ink only.
+  for (const wh of scene.wormholes) {
+    const path = Skia.PathBuilder.Make();
+    for (let i = 0; i <= 32; i++) {
+      const q = arcPoint(wh.a, wh.b, i / 32, 0.12);
+      const s = proj(q.x, q.y, q.z, cam);
+      if (i === 0) path.moveTo(s.x, s.y);
+      else path.lineTo(s.x, s.y);
+    }
+    // A casing in the background colour keeps the line legible over the galaxy's glow.
+    const arc = path.build();
+    canvas.drawPath(arc, paint(T.bg, 0.6, 3.5));
+    canvas.drawPath(arc, wh.network === 'bob' ? paint(T.ink, 0.85, 1.25) : paint(T.ink, 0.65, 1));
+  }
+  const NET_GATE = 8;
+  for (const node of scene.nodes) {
+    if (!node.gates.length) continue;
+    const q = P(node.p);
+    if (!on(q.x, q.y)) continue;
+    const a = node.dim ? DIM : 1;
+    flatOval(q.x, q.y, NET_GATE + 1, paint(T.bg, 0.6 * a));
+    if (node.gates.includes('bob')) flatOval(q.x, q.y, NET_GATE, paint(T.ink, 0.25 * a));
+    flatOval(q.x, q.y, NET_GATE, paint(T.ink, 0.85 * a, 1));
+    if (node.gates.includes('other')) {
+      flatOval(q.x, q.y, NET_GATE + 3.5, paint(T.bg, 0.6 * a, 3));
+      flatOval(q.x, q.y, NET_GATE + 3.5, paint(T.ink, 0.7 * a, 1));
+    }
+  }
+
   // 5b. Calling in: drawn on the motion layer (drawMotion), so the ripples can move.
 
   // 6. Ghost trails (flashbacks): a faint double hairline (a solid line with chevrons means a voyage, a faint solid
@@ -1141,7 +1173,7 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
     }
   }
 
-  // The galaxy locator, above the scale bar: the Milky Way at true scale (disc, bulge, schematic spiral arms) seen
+  // The galaxy locator, above the scale bar: the Milky Way at true scale (the face-on disc of the galaxy level) seen
   // from the same angle as the map, with a ring where the Sun is, 26,700 ly from the centre. It turns and tilts with
   // the camera, so at every angle it shows how the local map sits in the galaxy. An arrow from the Sun points to
   // galactic north (N). A tap on it turns the map back to the default view.
@@ -1152,23 +1184,13 @@ export function drawScene(canvas: SkCanvas, scene: Scene, cam: Camera, fonts: Fo
     canvas.drawCircle(cp.x, cp.y, R, paint(T.ink, 0.2, 0.75));
     const gcam: Camera = { yaw: cam.yaw, tilt: cam.tilt, scale: (R - 4) / GALAXY_R_PC, center: GALACTIC_CENTRE, cx: cp.x, cy: cp.y };
     const G = (x: number, y: number, z: number) => proj(x, y, z, gcam);
-    const sq = Math.max(0.02, squash);
-    const gr = R - 4;
-    canvas.drawOval(Skia.XYWHRect(cp.x - gr, cp.y - gr * sq, gr * 2, gr * 2 * sq), paint(T.ink, T.dark ? 0.08 : 0.06));
-    const arms = Skia.PathBuilder.Make();
-    for (let arm = 0; arm < 4; arm++) {
-      const ph = ARM_PHASE + (arm * Math.PI) / 2;
-      for (let i = 0; i <= 48; i++) {
-        const r = ARM_R0 * Math.pow(GALAXY_R_PC / ARM_R0, i / 48);
-        const th = ph + Math.log(r / ARM_R0) / ARM_B;
-        const q = G(GALACTIC_CENTRE.x + r * Math.cos(th), r * Math.sin(th), 0);
-        if (i === 0) arms.moveTo(q.x, q.y);
-        else arms.lineTo(q.x, q.y);
-      }
+    // The same face-on Milky Way as the galaxy level, clipped to the locator.
+    if (opt.galaxyDisc) {
+      canvas.save();
+      canvas.clipPath(Skia.PathBuilder.Make().addCircle(cp.x, cp.y, R - 1).build(), ClipOp.Intersect, true);
+      drawDiscTexture(canvas, opt.galaxyDisc, gcam, T.ink, T.dark ? 0.95 : 0.75);
+      canvas.restore();
     }
-    canvas.drawPath(arms.build(), paint(T.ink, T.dark ? 0.3 : 0.24, 1));
-    const bulge = 2200 * gcam.scale;
-    canvas.drawOval(Skia.XYWHRect(cp.x - bulge, cp.y - bulge * Math.max(0.45, sq), bulge * 2, bulge * 2 * Math.max(0.45, sq)), paint(T.ink, T.dark ? 0.3 : 0.22));
     const sun = G(0, 0, 0);
     const n = G(0, 0, 0.55 * GALAXY_R_PC);
     const nl = Math.hypot(n.x - sun.x, n.y - sun.y);

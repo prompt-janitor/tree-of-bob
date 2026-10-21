@@ -450,9 +450,34 @@ describe('place names', () => {
 describe('map layers', () => {
   const model = buildModel(data);
   const sweep = model.chapters.filter((_, i) => i % 7 === 0);
+  it('wormholes: links keep both ends on the map; hidden, no links and no gates', () => {
+    let seen = 0;
+    for (const ref of model.chapters) {
+      const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
+      const full = mapState(v, v.chapter.time ?? v.latest ?? v.maxYear);
+      const shown = filterMapState(v, full, { ...DEFAULT_LAYERS, empty: 'hide' });
+      const ids = new Set(shown.places.map((p) => p.id));
+      for (const w of shown.wormholes) {
+        expect(ids.has(w.a) && ids.has(w.b)).toBe(true);
+        seen++;
+      }
+      // A gate shows only where a revealed link is drawn.
+      for (const p of shown.places) if (p.gates.length) expect(shown.wormholes.some((w) => w.a === p.id || w.b === p.id)).toBe(true);
+      const hidden = filterMapState(v, full, { ...DEFAULT_LAYERS, wormholes: 'hide' });
+      expect(hidden.wormholes).toEqual([]);
+      for (const p of hidden.places) expect(p.gates).toEqual([]);
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+  it('wormholes: Sol has no gate in Book 1', () => {
+    const v = computeView(model, { book: 1, chapter: 30 });
+    const st = mapState(v, v.chapter.time!);
+    expect(st.wormholes).toEqual([]);
+    for (const p of st.places) expect(p.gates).toEqual([]);
+  });
   it('only ever removes: every place, person and journey kept is in the full map state', () => {
-    const all = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show', scut: 'show' } as const;
-    const variants = [DEFAULT_LAYERS, all, { ...all, empty: 'hide', others: 'hide', journeys: 'hide', presence: 'hide' } as const];
+    const all = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show', scut: 'show', wormholes: 'show' } as const;
+    const variants = [DEFAULT_LAYERS, all, { ...all, empty: 'hide', others: 'hide', journeys: 'hide', presence: 'hide', wormholes: 'chapter' } as const];
     for (const ref of sweep) {
       const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
       const full = mapState(v, v.chapter.time ?? v.latest ?? v.maxYear);
@@ -466,6 +491,7 @@ describe('map layers', () => {
           for (const id of p.others) expect(q!.others).toContain(id);
         }
         for (const vo of f.voyages) expect(full.voyages).toContain(vo);
+        for (const w of f.wormholes) expect(full.wormholes).toContain(w);
       }
     }
   });
