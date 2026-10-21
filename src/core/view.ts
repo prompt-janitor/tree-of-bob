@@ -24,6 +24,7 @@ import type {
   Reveal,
   ScutRecord,
   Status,
+  WormholeRecord,
 } from './types';
 
 /** The chapter the reader is about to read. `finished` (last chapter only) means the series is read. */
@@ -131,6 +132,8 @@ export interface ProgressView {
   otherMoves: MoveRecord[];
   /** Revealed fates of other replicants, in story order. */
   otherFates: FateRecord[];
+  /** Revealed wormhole links. */
+  wormholes: WormholeRecord[];
   chapter: ChapterContext;
   newHere: NewInChapter;
 }
@@ -168,6 +171,7 @@ export function computeView(model: Model, progress: Progress): ProgressView {
   const otherMoves = d.moves
     .filter((m) => seen(m.reveal) && otherIds.has(m.bob))
     .sort((a, c) => (evYearOf(model, a) ?? 0) - (evYearOf(model, c) ?? 0) || rank(a.reveal) - rank(c.reveal));
+  const wormholes = (d.wormholes ?? []).filter((w) => seen(w.reveal));
   const otherFates = d.fates
     .filter((f) => seen(f.reveal) && otherIds.has(f.bob))
     .sort((a, c) => (evYearOf(model, a) ?? 0) - (evYearOf(model, c) ?? 0) || rank(a.reveal) - rank(c.reveal));
@@ -287,7 +291,7 @@ export function computeView(model: Model, progress: Progress): ProgressView {
     model, progress: finished ? { book: ref.book.id, chapter: ref.chapter.n, finished } : { book: ref.book.id, chapter: ref.chapter.n }, index, P, finished, latest,
     minYear: Number.isFinite(minYear) ? minYear : latest ?? 0,
     maxYear: Number.isFinite(maxYear) ? maxYear : latest ?? 0,
-    ids: bobs.map((b) => b.id), info, moves, fates, scut, milestones, others, otherMoves, otherFates, chapter,
+    ids: bobs.map((b) => b.id), info, moves, fates, scut, milestones, others, otherMoves, otherFates, wormholes, chapter,
     newHere: { bobs: nb, moves: nm, fates: nf, scut: ns, milestones: nml, total: nb.length + nm.length + nf.length + ns.length + nml.length },
   };
   // Where people call in from is named only if the reader has already met that place.
@@ -546,5 +550,12 @@ export function knownPlaces(view: ProgressView): Set<string> {
   // Colonies, outposts and territory, once revealed (with their group).
   const groupSeen = new Set((view.model.data.groups ?? []).filter((g) => rank(g.reveal) <= view.P).map((g) => g.id));
   for (const pr of view.model.data.presence ?? []) if (groupSeen.has(pr.group) && rank(pr.reveal) <= view.P) add(pr.system);
+  // Places with their own reveal (wormhole hubs), and both ends of every revealed wormhole link.
+  for (const s of view.model.data.systems ?? []) if (s.reveal && rank(s.reveal) <= view.P) add(s.id);
+  for (const w of view.wormholes) {
+    add(w.a);
+    add(w.b);
+    for (const th of w.through ?? []) if (rank(th.reveal) <= view.P) add(th.id);
+  }
   return out;
 }

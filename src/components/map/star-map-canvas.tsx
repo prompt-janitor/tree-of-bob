@@ -14,13 +14,13 @@ import { Gesture, GestureDetector, MouseButton } from 'react-native-gesture-hand
 import { cancelAnimation, Easing, type SharedValue, useAnimatedReaction, useDerivedValue, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
-import { clampTilt, DEFAULT_TILT, DEFAULT_YAW, LY_PER_PC, MAX_TILT, pivotFit, scutRangeLy, type Camera, type Vec3 } from '@/core';
+import { clampTilt, DEFAULT_TILT, DEFAULT_YAW, LOCAL_RADIUS_LY, LY_PER_PC, MAX_TILT, pivotFit, scutRangeLy, type Camera, type Vec3 } from '@/core';
 import { useApp } from '@/state/app';
 import { mapPalette } from '@/theme/tokens';
 
 import { arcPoint, dotObstacles, drawMotion, drawScene, edgeMarkers, MOTION_CYCLES, MOTION_MS, proj, puckAt, trackEnds, voyageDots, type Box, type DrawHit, type Fonts } from './draw';
 import { buildScene, scaleBarFor, type Scene } from './scene';
-import type { MapHit, StarMapProps } from './types';
+import type { MapHit, MapLevel, StarMapProps } from './types';
 
 /** Generous hit radius for taps, points. */
 const HIT = 24;
@@ -35,11 +35,19 @@ const DROPS_REDUCED = 0.5;
 const TURNED = (10 * Math.PI) / 180;
 const TILTED = (5 * Math.PI) / 180;
 
-/** Zoom limits: the visible half-height in parsecs at the closest and the furthest zoom. */
+/** Each level's range for its default fit: the visible half-height in parsecs at the closest and the furthest zoom.
+ * The reader can zoom across both: one map from a few light years to the whole galaxy. */
 const ZOOM = {
   local: { near: 2 / LY_PER_PC, far: 260 / LY_PER_PC },
   galaxy: { near: 400, far: 80000 },
 } as const;
+
+/** Zooming out past LEVEL_OUT_LY (half the map's shorter side, in light years) the local places merge into the Sol
+ * neighbourhood (the galaxy level); zooming back in under LEVEL_IN_LY splits them again. The gap keeps a zoom that
+ * hovers near the switch from flipping back and forth. At these zooms the whole local neighbourhood is a few points
+ * across, so the merge barely moves anything. */
+const LEVEL_OUT_LY = 2500;
+const LEVEL_IN_LY = 1800;
 
 const SUPERSCRIPT = '⁰¹²³⁴⁵⁶⁷⁸⁹';
 
@@ -61,10 +69,12 @@ export function anchorOf(scene: Scene, hit: MapHit | null): Vec3 | null {
 }
 
 export default function StarMapCanvas(props: StarMapProps) {
-  const { view, state, level, pivot, selectedBob, callout, insets, chrome, scaleBar, style, onPress, onPressEmpty, onPanStart, onOffDefault, onUnanchored, locked = false, layers, fitState, scutNow = null, scutText = null, animate = true } = props;
+  const { view, state, level, pivot, selectedBob, callout, insets, chrome, scaleBar, style, onPress, onPressEmpty, onPanStart, onOffDefault, onUnanchored, onZoomLevel, locked = false, layers, fitState, scutNow = null, scutText = null, animate = true } = props;
   const { palette: appPalette, colourIn, mapTone } = useApp();
   // Gaia's all-sky map of the Milky Way (ESA/Gaia/DPAC, CC BY-SA 3.0 IGO), greyscale, the band within 40 degrees.
   const milkyWay = useImage(require('./milky-way.jpg'));
+  // The face-on Milky Way for the galaxy level, made by scripts/gen-galaxy.mjs.
+  const galaxyDisc = useImage(require('./galaxy-disc.jpg'));
   // The map can be darker than the app in light mode (mapTone); its Bob colours follow the map's scheme.
   const palette = mapPalette(appPalette, mapTone);
   const colourOf = useCallback((id: string) => colourIn(id, palette.scheme), [colourIn, palette.scheme]);
@@ -119,6 +129,9 @@ export default function StarMapCanvas(props: StarMapProps) {
   const cx = useSharedValue(0);
   const cy = useSharedValue(0);
   const minScale = useSharedValue(0.01);
+  // Half the free map area's shorter side (points), and whether the zoom now is the reader's own (pinch or wheel).
+  const halfPt = useSharedValue(1);
+  const userZoom = useSharedValue(false);
   const maxScale = useSharedValue(1000);
   const pinchFrom = useSharedValue(1);
   const fitScale = useSharedValue(10);
@@ -153,9 +166,39 @@ export default function StarMapCanvas(props: StarMapProps) {
     boxR.set(insets.left + inner.iw);
     boxB.set(insets.top + inner.ih);
     const half = Math.min(inner.iw, inner.ih) / 2;
-    minScale.set(half / ZOOM[level].far);
-    maxScale.set(half / ZOOM[level].near);
-  }, [inner, insets.left, insets.top, level, cx, cy, boxL, boxT, boxR, boxB, minScale, maxScale]);
+    halfPt.set(half);
+    minScale.set(half / ZOOM.galaxy.far);
+    maxScale.set(half / ZOOM.local.near);
+  }, [inner, insets.left, insets.top, cx, cy, boxL, boxT, boxR, boxB, minScale, maxScale, halfPt]);
+
+  // The reader's zoom moves between the levels: past LEVEL_OUT_LY the scene becomes the galaxy level, back under
+  // LEVEL_IN_LY the local one, with the camera left where it is. Only the reader's own zoom does this (a pinch or the
+  // wheel); a camera move the map makes itself (recentre, the level button) already goes to the level asked for.
+  const levelNow = useSharedValue<MapLevel>(level);
+  const zoomSwitch = useRef<MapLevel | null>(null);
+  useEffect(() => {
+    levelNow.set(level);
+  }, [level, levelNow]);
+  const reportLevel = useCallback(
+    (l: MapLevel) => {
+      zoomSwitch.current = l;
+      onZoomLevel?.(l);
+    },
+    [onZoomLevel],
+  );
+  // Zooming in on a far place (a hub, the galactic centre) stays on the galaxy level, which is where it is drawn: the
+  // local level is chosen again only with the centre of view near Sol.
+  useAnimatedReaction(
+    () => (halfPt.get() / Math.max(1e-9, scale.get())) * LY_PER_PC,
+    (ly) => {
+      if (!userZoom.get()) return;
+      const nearSol = Math.hypot(ox.get(), oy.get(), oz.get()) * LY_PER_PC < LOCAL_RADIUS_LY * 4;
+      const next = levelNow.get() === 'local' ? (ly > LEVEL_OUT_LY ? 'galaxy' : null) : ly < LEVEL_IN_LY && nearSol ? 'local' : null;
+      if (!next) return;
+      levelNow.set(next);
+      scheduleOnRN(reportLevel, next);
+    },
+  );
 
   const moveTo = useCallback(
     (target: { yaw?: number; tilt?: number; scale?: number; center?: Vec3 }, animate: boolean) => {
@@ -167,6 +210,7 @@ export default function StarMapCanvas(props: StarMapProps) {
         far = d * Math.max(scale.get(), target.scale ?? 0) > 2 * Math.max(w, h, 1);
       }
       const run = animate && !reduceMotion && !far;
+      userZoom.set(false);
       const cfg = { duration: 450, easing: Easing.out(Easing.cubic) };
       const set = (sv: SharedValue<number>, v: number) => {
         sv.set(run ? withTiming(v, cfg) : v);
@@ -186,7 +230,7 @@ export default function StarMapCanvas(props: StarMapProps) {
         set(oz, target.center.z);
       }
     },
-    [reduceMotion, yaw, tilt, scale, ox, oy, oz, minScale, maxScale, w, h],
+    [reduceMotion, yaw, tilt, scale, ox, oy, oz, minScale, maxScale, w, h, userZoom],
   );
 
   /** The default camera for a scene: its pivot and the scale that shows the nearest few places round it. */
@@ -239,6 +283,13 @@ export default function StarMapCanvas(props: StarMapProps) {
     if (!w || !h) return;
     const last = seen.current;
     seen.current = { level, n: pivot.n, pivotKey: scene.pivotKey, iw: inner.iw, ih: inner.ih };
+    if (last && last.level !== level && zoomSwitch.current === level) {
+      // The reader zoomed across the switch: the camera stays; only the defaults (recentre) follow the new level.
+      zoomSwitch.current = null;
+      setDefaults(scene);
+      return;
+    }
+    zoomSwitch.current = null;
     if (!last || last.level !== level) {
       const f = setDefaults(scene);
       moveTo({ yaw: DEFAULT_YAW, tilt: DEFAULT_TILT, scale: f.scale, center: scene.pivot }, !!last);
@@ -326,11 +377,12 @@ export default function StarMapCanvas(props: StarMapProps) {
         scaleBarLy: barLy.get(),
         viewportPrefix,
         milkyWay,
+        galaxyDisc,
         scutText,
       });
     }
     return rec.finishRecordingAsPicture();
-  }, [scene, fonts, w, h, chrome, scaleBar, viewportPrefix, milkyWay, scutText]);
+  }, [scene, fonts, w, h, chrome, scaleBar, viewportPrefix, milkyWay, galaxyDisc, scutText]);
 
   // The motion layer (ripples, voyage glints): its own picture, redrawn every frame only while something moves, so
   // the map itself is drawn only when the camera or the scene changes. Still with Reduce Motion or off screen.
@@ -557,6 +609,7 @@ export default function StarMapCanvas(props: StarMapProps) {
       .onUpdate((e) => {
         // Once the fingers have clearly spread or closed, the rest of this gesture only zooms.
         if (Math.abs(Math.log(e.scale)) > 0.06) zoomOnly.set(true);
+        userZoom.set(true);
         scale.set(Math.min(maxScale.get(), Math.max(minScale.get(), pinchFrom.get() * e.scale)));
       })
       .onFinalize(() => {
@@ -570,7 +623,7 @@ export default function StarMapCanvas(props: StarMapProps) {
       });
     // No double tap: it would hold every single tap until it failed. The recentre button does that job.
     return Gesture.Race(tap, Gesture.Simultaneous(pan, pinch));
-  }, [onTap, notifyPan, reduceMotion, yaw, tilt, scale, ox, oy, oz, drops, minScale, maxScale, pinchFrom, panMode, moving, lock, zoomOnly]);
+  }, [onTap, notifyPan, reduceMotion, yaw, tilt, scale, ox, oy, oz, drops, minScale, maxScale, pinchFrom, panMode, moving, lock, zoomOnly, userZoom]);
 
   // Web: the scroll wheel (and trackpad pinch, which arrives as ctrl+wheel) zooms; shift-drag or right-drag pans.
   const host = useRef<View>(null);
@@ -581,6 +634,7 @@ export default function StarMapCanvas(props: StarMapProps) {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const k = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015));
+      userZoom.set(true);
       scale.set(Math.min(maxScale.get(), Math.max(minScale.get(), scale.get() * k)));
     };
     const onDown = (e: PointerEvent) => {
@@ -597,7 +651,7 @@ export default function StarMapCanvas(props: StarMapProps) {
       el.removeEventListener('pointerdown', onDown, true);
       el.removeEventListener('contextmenu', onMenu);
     };
-  }, [scale, minScale, maxScale, panMode, notifyPan, lock]);
+  }, [scale, minScale, maxScale, panMode, notifyPan, lock, userZoom]);
 
   const onLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;

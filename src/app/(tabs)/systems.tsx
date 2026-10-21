@@ -31,7 +31,7 @@ import { identityColour } from '@/theme/identity';
 import { mapPalette, type MapTone } from '@/theme/tokens';
 
 /** Every layer on Show (the panel's Show all button). */
-const ALL_LAYERS: MapLayers = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show', scut: 'volume' };
+const ALL_LAYERS: MapLayers = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show', scut: 'volume', wormholes: 'show' };
 
 /** floating: the target is not drawn on this level, so the callout has no pointer. */
 type Callout = { hit: MapHit; from?: MapHit; floating?: boolean } | { offmap: true };
@@ -76,13 +76,13 @@ export default function SystemsScreen() {
   // A network fit waiting for the Layers panel to close (phone).
   const fitNet = useRef(false);
   const groups = useMemo(() => groupVoyages(state.voyages), [state]);
-  // Galaxy is offered only once the reader has met a place outside the local neighbourhood.
+  // The level button is offered only once the reader has met a place outside the local neighbourhood; zooming out
+  // reaches the galaxy level at any time (it is scenery and the Sol neighbourhood until then).
   const hasFar = state.places.some((pl) => pl.pos && !pl.local);
   const unplaced = state.places.filter((pl) => !pl.pos);
   const narrator = view.chapter.narrator;
 
-  const [levelRaw, setLevel] = useState<MapLevel>('local');
-  const level: MapLevel = hasFar ? levelRaw : 'local';
+  const [level, setLevel] = useState<MapLevel>('local');
   const [pivot, setPivot] = useState<PivotRequest>({ n: 0, target: null });
   const pivotTo = (target: PivotRequest['target']) => setPivot((r) => ({ n: r.n + 1, target }));
   useEffect(() => {
@@ -156,6 +156,11 @@ export default function SystemsScreen() {
     setLevel(l);
     setCallout(null);
   };
+  // The reader zoomed across the switch between the levels: the camera stays put.
+  const onZoomLevel = useCallback((l: MapLevel) => {
+    setLevel(l);
+    setCallout(null);
+  }, []);
   const showNarrator = () => {
     const pl = state.places.find((x) => x.narrator);
     const g = narrator ? groups.find((x) => x.members.some((m) => m.who === narrator)) : null;
@@ -344,6 +349,7 @@ export default function SystemsScreen() {
     { key: 'empty', label: 'Empty systems' },
     { key: 'presence', label: 'Colonies' },
     ...(scutKnown ? [{ key: 'scut' as const, label: netLabel }] : []),
+    ...(view.wormholes.length ? [{ key: 'wormholes' as const, label: 'Wormholes' }] : []),
   ];
   // Choosing to show the network frames it (on a phone, once the panel is closed), unless the centre is locked.
   const setLayer = (key: (typeof LAYER_KEYS)[number], mode: LayerMode | ScutMode) => {
@@ -453,6 +459,7 @@ export default function SystemsScreen() {
           view={view}
           state={state}
           level={level}
+          onZoomLevel={onZoomLevel}
           pivot={pivot}
           selectedBob={selectedBob}
           callout={calloutHit}

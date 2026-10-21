@@ -93,7 +93,40 @@ describe('knownPlaces', () => {
         // A chapter already read names the system it is set in.
         if (rank({ book: c.book.id, chapter: c.chapter.n }) <= v.P && c.chapter.system) named.add(c.chapter.system);
       }
+      // Wormhole hubs from their own reveal, and the ends of revealed wormhole links.
+      for (const sy of data.systems ?? []) if (sy.reveal && rank(sy.reveal) <= v.P) named.add(sy.id);
+      for (const w of data.wormholes ?? [])
+        if (rank(w.reveal) <= v.P) {
+          named.add(w.a);
+          named.add(w.b);
+          for (const th of w.through ?? []) if (rank(th.reveal) <= v.P) named.add(th.id);
+        }
       for (const k of knownPlaces(v)) expect(named, `B${ref.book.id} Ch ${ref.chapter.n}: ${k}`).toContain(k);
+    }
+  });
+  it('a link through named hubs splits at each hub once it is revealed, and is never drawn twice', () => {
+    // A chain A–C revealed at B5 ch 14, passing through B, met at B5 ch 43.
+    const ids = (data.systems ?? []).filter((sy) => sy.pos).slice(0, 3).map((sy) => sy.id);
+    const [a, b, c] = ids;
+    const d2: TreeData = { ...data, wormholes: [{ a, b: c, network: 'pgf', reveal: { book: 5, chapter: 14 }, through: [{ id: b, reveal: { book: 5, chapter: 43 } }], confidence: 'low', sources: ['test'] }] };
+    const m2 = buildModel(d2);
+    const links = (book: number, chapter: number) => {
+      const v = computeView(m2, { book, chapter });
+      return mapState(v, v.chapter.time ?? v.latest ?? v.maxYear).wormholes.map((w) => `${w.a}|${w.b}`);
+    };
+    expect(links(5, 10)).toEqual([]);
+    expect(links(5, 30)).toEqual([`${a}|${c}`]);
+    expect(links(5, 50)).toEqual([`${a}|${b}`, `${b}|${c}`]);
+  });
+  it('wormhole hubs and links stay hidden until their reveal', () => {
+    for (const ref of sweep) {
+      const v = computeView(model, { book: ref.book.id, chapter: ref.chapter.n });
+      const known = knownPlaces(v);
+      for (const w of v.wormholes) expect(rank(w.reveal)).toBeLessThanOrEqual(v.P);
+      for (const sy of data.systems ?? []) {
+        const linked = (data.wormholes ?? []).some((w) => (w.a === sy.id || w.b === sy.id) && rank(w.reveal) <= v.P);
+        if (sy.reveal && rank(sy.reveal) > v.P && !linked) expect(known.has(sy.id), `B${ref.book.id} Ch ${ref.chapter.n}: ${sy.id}`).toBe(false);
+      }
     }
   });
 });
