@@ -29,6 +29,9 @@ export function useContentInsets() {
   return {
     top: compact ? insets.top : 0,
     bottom: compact ? PHONE_NAV_CLEARANCE + insets.bottom : 110,
+    // Side safe areas (landscape notches, the iPhone Duo's status column): content keeps clear of them.
+    left: insets.left,
+    right: insets.right,
   };
 }
 
@@ -42,7 +45,7 @@ export function Screen({ title, subtitle, right, children, maxWidth = 760 }: { t
       style={{ flex: 1, backgroundColor: p.bg }}
       onScroll={compact ? onScroll : undefined}
       scrollEventThrottle={32}
-      contentContainerStyle={{ paddingTop: pad.top + (compact ? 8 : 12), paddingBottom: pad.bottom, paddingHorizontal: 16, alignItems: 'center' }}>
+      contentContainerStyle={{ paddingTop: pad.top + (compact ? 8 : 12), paddingBottom: pad.bottom, paddingLeft: 16 + pad.left, paddingRight: 16 + pad.right, alignItems: 'center' }}>
       <View style={{ width: '100%', maxWidth, gap: 14 }}>
         {title ? (
           <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12, marginTop: compact ? 6 : 0 }}>

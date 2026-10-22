@@ -5,6 +5,7 @@
 import { useMemo, useState } from 'react';
 import { PanResponder, Platform, ScrollView, View } from 'react-native';
 import Animated, { Easing, FadeIn, FadeOut, SlideInRight, SlideOutRight } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BobDetails } from '@/components/bob-details';
 import { IconButton } from '@/components/bits';
@@ -28,6 +29,7 @@ export const DRAWER_EASING = Easing.bezier(0.2, 0.8, 0.2, 1);
 
 export function SideDrawer({ room, onDragging }: { room: number; onDragging?: (dragging: boolean) => void }) {
   const { palette: p, selected, select, drawerWidth, setDrawerWidth } = useApp();
+  const insets = useSafeAreaInsets();
   const committed = drawerWidthFor(drawerWidth, room);
   // While dragging, the width follows the finger without saving on every frame.
   const [live, setLive] = useState<number | null>(null);
@@ -98,12 +100,12 @@ export function SideDrawer({ room, onDragging }: { room: number; onDragging?: (d
         ]}>
         <View style={{ width: 5, height: 44, borderRadius: 3, backgroundColor: live != null ? p.ink2 : p.ink3, opacity: live != null ? 1 : 0.6 }} />
       </View>
-      <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 8, paddingTop: 6 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'flex-end', paddingLeft: 8, paddingRight: 8 + insets.right, paddingTop: 6 }}>
         <IconButton icon="chevronRight" label="Close details" onPress={() => select(null)} color={p.ink2} />
       </View>
       {/* Switching Bobs while open cross-fades the details instead of swapping them in one frame. */}
       <Animated.View key={selected} entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 110 }}>
+        <ScrollView contentContainerStyle={{ paddingLeft: 20, paddingRight: 20 + insets.right, paddingBottom: 110 }}>
           <BobDetails id={selected} />
         </ScrollView>
       </Animated.View>

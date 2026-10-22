@@ -1,4 +1,5 @@
 [
+ { "version": "0.2.7", "notes": ["iPhone Duo: both screens, with controls clear of the status indicator.", "Map: tools in a column on the right, the key and the scale in the bottom corners."] },
  { "version": "0.2.6", "notes": ["Galaxy view: the Milky Way and the Magellanic Clouds in 3D.", "One map: zoom out from the local stars to the whole galaxy.", "Wormhole links on the galaxy map, as the books reveal them."] },
  { "version": "0.2.5", "notes": ["Calling in: ripples on the map from where someone is to where the chapter is set; who takes part on the Chapter page and in the Tree.", "SCUT network layer: its links, or the space within its range.", "Key beside the map on tablet and computer.", "Best-guess positions for systems the books don't place.", "Chapter data rebuilt from the books."] },
  { "version": "0.2.4", "notes": ["Real night sky on the map: catalogue stars and the Milky Way from Gaia.", "Dark map background by default; Light in Layers.", "Lower home view; outer rings fade out."] },

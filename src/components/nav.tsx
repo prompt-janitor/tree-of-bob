@@ -82,7 +82,7 @@ export function PhoneNav({ current }: { current: string }) {
 
   if (navCompact) {
     return (
-      <View pointerEvents="box-none" style={{ position: 'absolute', left: 16, right: 16, bottom, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View pointerEvents="box-none" style={{ position: 'absolute', left: 16 + insets.left, right: 16 + insets.right, bottom, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <CurrentTabButton tab={tab} onPress={() => setNavCompact(false)} />
         <ReadingCapsule variant="compact" style={{ flex: 1 }} />
         <SearchButton size={56} />
@@ -90,7 +90,7 @@ export function PhoneNav({ current }: { current: string }) {
     );
   }
   return (
-    <View pointerEvents="box-none" style={{ position: 'absolute', left: 16, right: 16, bottom, gap: 10 }}>
+    <View pointerEvents="box-none" style={{ position: 'absolute', left: 16 + insets.left, right: 16 + insets.right, bottom, gap: 10 }}>
       <ReadingCapsule variant="full" />
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
         <Glass style={{ flex: 1, height: 60, borderRadius: 30, flexDirection: 'row', alignItems: 'center', gap: 2, padding: 6 }} accessibilityRole="tablist">
@@ -125,7 +125,7 @@ export function WideTopBar() {
   const p = usePalette();
   const update = useUpdate().available;
   return (
-    <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 12, paddingBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+    <View style={{ paddingTop: insets.top + 8, paddingLeft: 12 + insets.left, paddingRight: 12 + insets.right, paddingBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 140 }}>
         <BrandMark />
         <T variant="row" weight="700">Tree of Bob</T>

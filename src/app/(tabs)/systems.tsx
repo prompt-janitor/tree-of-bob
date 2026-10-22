@@ -25,12 +25,20 @@ import { useContentInsets } from '@/components/screen';
 import { T } from '@/components/text';
 import { DEFAULT_LAYERS, filterMapState, groupVoyages, LAYER_KEYS, mapState, routes, scutLabel, scutNetwork, scutRangeLy, scutSpoken, scutText, type LayerMode, type MapLayers, type ScutMode } from '@/core';
 import { useLayout } from '@/hooks/use-layout';
+import { useOcclusions } from '@/hooks/use-occlusions';
 import { useOpenBob } from '@/hooks/use-open-bob';
 import { useApp } from '@/state/app';
 import { identityColour } from '@/theme/identity';
 import { mapPalette, type MapTone } from '@/theme/tokens';
 
 /** Every layer on Show (the panel's Show all button). */
+/** Map tool buttons, points (one column down the right side). */
+const TOOL = 44;
+/** Width kept for the distance scale and the viewport line under it. */
+const SCALE_W = 200;
+/** Wide screens: how far up from the bottom a control goes to clear the reading dock. */
+const DOCK_CLEAR = 96;
+
 const ALL_LAYERS: MapLayers = { bobs: 'show', others: 'show', journeys: 'show', history: 'show', names: 'show', empty: 'show', presence: 'show', scut: 'volume', wormholes: 'show' };
 
 /** floating: the target is not drawn on this level, so the callout has no pointer. */
@@ -49,6 +57,10 @@ export default function SystemsScreen() {
   );
   const { compact } = useLayout();
   const safe = useSafeAreaInsets();
+  // What the system covers on the window, and where this screen sits in it (to compare the two).
+  const occlusions = useOcclusions();
+  const root = useRef<View>(null);
+  const [origin, setOrigin] = useState({ x: 0, y: 0 });
   const pad = useContentInsets();
   const open = useOpenBob();
 
@@ -212,28 +224,67 @@ export default function SystemsScreen() {
   // --- layout
   const W = area.w;
   const H = area.h;
-  const header = compact ? { top: safe.top + 8, left: 16, right: 16 + 44 + 8 } : { top: 12, left: 12, width: Math.min(420, W * 0.5) };
-  const headerBottom = header.top + headerH;
+  // Controls keep clear of what covers the screen. The safe area covers a whole edge (the iPhone Duo's status
+  // column); where the system says exactly what is covered (iOS 27.1 reserved regions), a control only keeps clear of
+  // that, so the free part of the edge below the indicator holds the tools. The map runs under all of it.
+  const L = 16 + safe.left;
+  const R = 16 + safe.right;
+  const covered = (occlusions ?? [])
+    .map((o) => ({ l: o.x - origin.x, t: o.y - origin.y, r: o.x + o.width - origin.x, b: o.y + o.height - origin.y }))
+    .filter((c) => c.r > 0 && c.l < W && c.b > 0 && c.t < H);
+  const rightKnown = covered.some((c) => c.l > W / 2);
+  /** Distance from the right edge for a control spanning t–b down the map. */
+  const rightFor = (t: number, b: number) => (rightKnown ? Math.max(16, ...covered.filter((c) => c.l > W / 2 && c.t < b && c.b > t).map((c) => W - c.l)) : R);
   const toolsBottom = compact ? Math.max(0, pad.bottom - 20) : 0;
+  // The tools: one column down the right side (the Key last on wide screens; on a phone it sits beside the header).
+  const nTools = (hasFar ? 1 : 0) + 3 + (compact ? 0 : 1);
+  const colH = nTools * TOOL + (nTools - 1) * 8;
+  let colTop = compact ? H - toolsBottom - colH : 16;
+  let colRight = rightFor(colTop, colTop + colH);
+  if (!compact && rightKnown && colRight > 16) {
+    // Below whatever covers the top of the edge, if the column still fits there.
+    const under = Math.max(...covered.filter((c) => c.l > W / 2 && c.t < colTop + colH && c.b > colTop).map((c) => c.b)) + 8;
+    if (under + colH < H - 120 && rightFor(under, under + colH) === 16) {
+      colTop = under;
+      colRight = 16;
+    }
+  }
+  const colBottom = colTop + colH;
+  const keyTop = safe.top + 8 + 6;
+  const keyRight = rightFor(keyTop, keyTop + TOOL);
+  const header = compact ? { top: safe.top + 8, left: L, right: keyRight + TOOL + 8 } : { top: 12, left: 12 + safe.left, width: Math.min(420, W * 0.5) };
+  const headerBottom = header.top + headerH;
   const insets = compact
-    ? { top: headerBottom + 8, right: 16, bottom: Math.max(0, pad.bottom - 24), left: 16 }
-    : { top: Math.max(80, headerBottom + 12), right: 16, bottom: pad.bottom, left: 16 };
+    ? { top: headerBottom + 8, right: R, bottom: Math.max(0, pad.bottom - 24), left: L }
+    : { top: Math.max(80, headerBottom + 12), right: R, bottom: pad.bottom, left: L };
   const innerH = Math.max(80, H - insets.top - insets.bottom);
   const cx = insets.left + Math.max(80, W - insets.left - insets.right) / 2;
   const cy = insets.top + innerH / 2;
   const bottomLimit = compact ? H - toolsBottom - 8 : H - pad.bottom + 10;
-  const calloutWidth = compact ? Math.min(320, W - 32) : 340;
+  const calloutWidth = compact ? Math.min(320, W - L - R) : 340;
   const spaceAbove = cy - headerBottom - 8 - 14;
   const spaceBelow = bottomLimit - cy - 14;
   const below = spaceAbove < H * 0.4 && spaceBelow > spaceAbove;
   const calloutMax = Math.max(120, Math.min(H * 0.5, below ? spaceBelow : spaceAbove));
-  const pillBottom = compact ? toolsBottom : 96;
+  // Wide screens: the reading dock is centred along the bottom of the content (which starts origin.x into the window
+  // when the chapter rail is open). The scale and the key sit in the corners beside it when they clear it, else above.
+  const dockSpan = origin.x + W;
+  const dockW = Math.min(460, dockSpan - 32);
+  const dockL = dockSpan / 2 - dockW / 2 - origin.x;
+  const dockR = dockL + dockW;
+  const nUnplaced = unplaced.length;
+  const net14 = netText ? 14 : 0;
+  const scaleX = 20 + (compact ? safe.left : 0);
+  const scaleLow = !compact && scaleX + SCALE_W + 12 <= dockL;
+  const scaleY = compact
+    ? H - toolsBottom - (nUnplaced ? 44 + 14 : 14) - 12 - net14
+    : scaleLow
+      ? H - 20 - 19 - net14
+      : H - DOCK_CLEAR - (nUnplaced ? 44 + 14 : 14) - 12 - net14;
+  // The off-map pill: bottom left on a phone; on wide screens above the galaxy locator when the scale is in the corner.
+  const pillBottom = compact ? toolsBottom : scaleLow ? H - scaleY + 24 + 2 * COMPASS_R + 10 : DOCK_CLEAR;
   const pillPeople = unplaced.reduce((n, pl) => n + pl.bobs.length + pl.others.length, 0);
   const narratorOffMap = unplaced.some((pl) => pl.narrator);
-  // The floating controls, so the map keeps its labels out from under them.
-  const nUnplaced = unplaced.length;
-  const nTools = (hasFar ? 1 : 0) + 3 + (compact ? 0 : 1);
-  const toolSize = compact ? 44 : 48;
   const headerR = compact ? W - (header.right ?? 0) : (header.left ?? 0) + (header.width ?? 0);
   // (The React Compiler memoizes these, so the map re-records its picture only when they change.)
   // The key beside the map (wide screens with room): only what is drawn now.
@@ -252,23 +303,22 @@ export default function SystemsScreen() {
   const legendHere = legendRoom && legendItems.length > 0;
   const showLegend = legendHere && mapLegend && !layersOpen;
   const [legendH, setLegendH] = useState(0);
+  // The key panel hugs the bottom right corner, under the tools, unless the dock is in the way.
+  const legendRight = rightFor(colBottom + 8, H);
+  const legendBottom = W - legendRight - LEGEND_WIDTH >= dockR + 12 ? 20 : DOCK_CLEAR;
+  const legendMax = H - legendBottom - colBottom - 8;
   const chrome: { l: number; t: number; r: number; b: number }[] = [];
   if (W && H) {
-    if (showLegend && legendH) chrome.push({ l: W - 16 - LEGEND_WIDTH, t: H - pillBottom - legendH, r: W - 16, b: H - pillBottom });
+    if (showLegend && legendH) chrome.push({ l: W - legendRight - LEGEND_WIDTH, t: H - legendBottom - legendH, r: W - legendRight, b: H - legendBottom });
     chrome.push({ l: header.left ?? 0, t: header.top, r: headerR, b: header.top + headerH });
-    if (compact) {
-      chrome.push({ l: W - 16 - 44, t: safe.top + 14, r: W - 16, b: safe.top + 58 });
-      const th = nTools * 44 + (nTools - 1) * 8;
-      chrome.push({ l: W - 16 - 44, t: H - toolsBottom - th, r: W - 16, b: H - toolsBottom });
-    } else {
-      chrome.push({ l: W - 16 - nTools * toolSize - (nTools - 1) * 8, t: 16, r: W - 16, b: 16 + toolSize });
-    }
+    if (compact) chrome.push({ l: W - keyRight - TOOL, t: keyTop, r: W - keyRight, b: keyTop + TOOL });
+    chrome.push({ l: W - colRight - TOOL, t: colTop, r: W - colRight, b: colBottom });
     if (nUnplaced) chrome.push({ l: 16, t: H - pillBottom - 44, r: 16 + (pillW || 200), b: H - pillBottom });
+    // What the system covers (the Duo's status indicator): no label goes under it.
+    for (const c of covered) chrome.push(c);
   }
-  // The distance scale bar's fixed spot: bottom left of the map, above the off-map pill (the only distance cue), with
-  // room under it for the viewport diameter line.
-  const scaleBar = W && H ? { x: 20, y: H - pillBottom - (nUnplaced ? 44 + 14 : 14) - 12 - (netText ? 14 : 0) } : null;
-  // The galaxy locator above it is the recentre control (drawn by the map; this button covers it).
+  // The distance scale bar's fixed spot: bottom left of the map, with room under it for the viewport diameter line.
+  const scaleBar = W && H ? { x: scaleX, y: scaleY } : null;
   const locator = compassAt(scaleBar);
 
   let calloutView: ReactNode = null;
@@ -320,23 +370,23 @@ export default function SystemsScreen() {
       label={level === 'local' ? 'Show the galaxy' : 'Show the local neighbourhood'}
       selected={level === 'galaxy'}
       onPress={() => onLevel(level === 'local' ? 'galaxy' : 'local')}
-      size={compact ? 44 : 48}>
+      size={TOOL}>
       <LevelGlyph galaxy={level === 'local'} />
     </ToolButton>
   ) : null;
   const listButton = (
-    <ToolButton label="List everyone" onPress={showList} size={compact ? 44 : 48}>
+    <ToolButton label="List everyone" onPress={showList} size={TOOL}>
       <Icon name="log" color={p.ink} size={20} />
     </ToolButton>
   );
   const layersButton = (
-    <ToolButton label="Layers" onPress={() => setLayersOpen((o) => !o)} size={compact ? 44 : 48} selected={layersOpen}>
+    <ToolButton label="Layers" onPress={() => setLayersOpen((o) => !o)} size={TOOL} selected={layersOpen}>
       <LayersGlyph />
     </ToolButton>
   );
   // Locked: two fingers only zoom, so the centre stays on the narrator (or the place last tapped). Filled while locked.
   const lockButton = (
-    <ToolButton label={mapLock ? 'Unlock the centre' : 'Lock the centre'} onPress={() => setMapLock(!mapLock)} size={compact ? 44 : 48} active={mapLock}>
+    <ToolButton label={mapLock ? 'Unlock the centre' : 'Lock the centre'} onPress={() => setMapLock(!mapLock)} size={TOOL} active={mapLock}>
       <LockGlyph locked={mapLock} />
     </ToolButton>
   );
@@ -375,7 +425,7 @@ export default function SystemsScreen() {
     <Glass
       style={[
         { position: 'absolute', borderRadius: 20, paddingVertical: 6 },
-        compact ? { left: 16, right: 16 + 44 + 8, bottom: toolsBottom } : { right: 16, top: 16 + 48 + 8, width: 320 },
+        compact ? { left: L, right: colRight + TOOL + 8, bottom: toolsBottom } : { right: colRight + TOOL + 8, top: colTop, width: 320 },
       ]}>
       {layerRows.map((r) => (
         <View key={r.key} accessibilityRole="radiogroup" accessibilityLabel={r.label} style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', paddingLeft: 14, paddingRight: 8, gap: 8 }}>
@@ -446,7 +496,7 @@ export default function SystemsScreen() {
     <ToolButton
       label={legendHere ? (mapLegend ? 'Hide the map key' : 'Show the map key') : 'Map key'}
       onPress={() => (legendHere ? setMapLegend(!mapLegend) : router.push({ pathname: '/key', params: { from: 'map' } }))}
-      size={compact ? 44 : 48}
+      size={TOOL}
       selected={legendHere && mapLegend}>
       <T variant="secondary" weight="700">Key</T>
     </ToolButton>
@@ -454,6 +504,12 @@ export default function SystemsScreen() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: mp.bg }} onLayout={(e) => setArea({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
+      <View
+        ref={root}
+        pointerEvents="none"
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+        onLayout={() => root.current?.measureInWindow((x, y) => setOrigin((o) => (o.x === x && o.y === y ? o : { x, y })))}
+      />
       <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" aria-hidden style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
         <StarMap
           view={view}
@@ -482,8 +538,8 @@ export default function SystemsScreen() {
       </View>
 
       {showLegend ? (
-        <View style={{ position: 'absolute', right: 16, bottom: pillBottom }}>
-          <MapLegend items={legendItems} animate={focused} maxHeight={H - pillBottom - (16 + 48 + 8) - 16} onShowAll={() => router.push('/key')} onClose={() => setMapLegend(false)} onLayout={(e) => setLegendH(Math.round(e.nativeEvent.layout.height))} />
+        <View style={{ position: 'absolute', right: legendRight, bottom: legendBottom }}>
+          <MapLegend items={legendItems} animate={focused} maxHeight={legendMax} onShowAll={() => router.push('/key')} onClose={() => setMapLegend(false)} onLayout={(e) => setLegendH(Math.round(e.nativeEvent.layout.height))} />
         </View>
       ) : null}
 
@@ -491,31 +547,20 @@ export default function SystemsScreen() {
         <ChapterHeaderCard state={fullState} onPress={showNarrator} onShowList={showList} spokenExtra={netShown && scutKnown ? scutSpoken(netLabel, net, nowNet) : undefined} />
       </View>
 
-      {compact ? (
-        <>
-          <View style={{ position: 'absolute', top: safe.top + 8 + 6, right: 16 }}>{keyButton}</View>
-          <View pointerEvents="box-none" style={{ position: 'absolute', right: 16, bottom: toolsBottom, gap: 8 }}>
-            {levelButton}
-            {listButton}
-            {layersButton}
-            {lockButton}
-          </View>
-        </>
-      ) : (
-        <View pointerEvents="box-none" style={{ position: 'absolute', top: 16, right: 16, flexDirection: 'row', gap: 8 }}>
-          {levelButton}
-          {listButton}
-          {layersButton}
-          {lockButton}
-          {keyButton}
-        </View>
-      )}
+      {compact ? <View style={{ position: 'absolute', top: keyTop, right: keyRight }}>{keyButton}</View> : null}
+      <View pointerEvents="box-none" style={{ position: 'absolute', top: colTop, right: colRight, gap: 8 }}>
+        {levelButton}
+        {listButton}
+        {layersButton}
+        {lockButton}
+        {compact ? null : keyButton}
+      </View>
 
       {unplaced.length ? (
         <Glass
           interactive
           onLayout={(e) => setPillW(Math.round(e.nativeEvent.layout.width))}
-          style={{ position: 'absolute', left: 16, bottom: pillBottom, height: 44, borderRadius: 22, maxWidth: compact ? W - 16 - 16 - 44 - 12 : 360 }}>
+          style={{ position: 'absolute', left: L, bottom: pillBottom, height: 44, borderRadius: 22, maxWidth: compact ? W - L - R - 44 - 12 : 360 }}>
           <Pressable
             onPress={() => setCallout(callout && 'offmap' in callout ? null : { offmap: true })}
             accessibilityRole="button"
