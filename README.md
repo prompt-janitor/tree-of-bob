@@ -10,9 +10,7 @@ A spoiler-free companion to Dennis E. Taylor's Bobiverse books.
   <img src=".github/screenshots/iphone-systems.gif" width="30%" alt="Star map on iPhone">
 </p>
 <p align="center">
-  <img src=".github/screenshots/ipad-systems.gif" width="48%" alt="Star map on iPad">
-  &nbsp;
-  <img src=".github/screenshots/ipad-tree.webp" width="48%" alt="Tree on iPad">
+  <img src=".github/screenshots/iphone-duo.gif" width="96%" alt="Added iPhone Duo support" title="Added iPhone Duo support">
 </p>
 <h3 align="center"><a href="https://prompt-janitor.github.io/tree-of-bob/">prompt-janitor.github.io/tree-of-bob</a></h3>
 

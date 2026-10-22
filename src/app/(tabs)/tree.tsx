@@ -45,7 +45,8 @@ export default function TreeScreen() {
   const lineage = useMemo(() => (selected && view.info.has(selected) ? new Set([selected, ...ancestors(view, selected)]) : null), [selected, view]);
   // Regular widths: up to 260 pt for the name and location, but never more than half the list (the drawer may be open).
   const nameWidth = compact ? Math.min(176, Math.round(width * 0.42)) : Math.min(260, Math.round((listWidth || width) * 0.5));
-  const rightPad = 16;
+  // Clear of a side safe area on the right (the iPhone Duo's status column).
+  const rightPad = 16 + pad.right;
   const rowH = dense ? 28 : 48;
   // Lanes are drawn in points: the list width less the name column (or the large-text inset) and the right pad.
   const trackWidth = Math.max(0, listWidth - (largeText ? 16 : nameWidth) - rightPad);
