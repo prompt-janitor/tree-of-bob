@@ -3,7 +3,7 @@
   "short_name": "Tree of Bob",
   "description": "Spoiler-free companion to Dennis E. Taylor's Bobiverse books. Unofficial fan project.",
   "lang": "en",
-  "id": "./",
+  "id": "/tree-of-bob/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
